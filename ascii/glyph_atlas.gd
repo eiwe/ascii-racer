@@ -22,6 +22,9 @@ var texture: ImageTexture
 var data_texture: ImageTexture
 ## Mean coverage of each glyph over its whole box (0..1, unnormalised).
 var coverage: PackedFloat32Array = PackedFloat32Array()
+## Per glyph, the 2x3 shape vector (normalised as in data_texture), for CPU
+## glyph matching (e.g. overlay art).
+var shape_vectors: Array[PackedFloat32Array] = []
 var ready_to_use: bool = false
 
 var _building: bool = false
@@ -124,17 +127,20 @@ func _build_now(font: Font, size_px: int, charset: String) -> void:
 		shapes.append(sums)
 
 	var data := Image.create(n, 2, false, Image.FORMAT_RGBAF)
+	var vectors: Array[PackedFloat32Array] = []
 	for i in n:
 		var s := shapes[i]
 		var v := PackedFloat32Array()
 		for k in 6:
 			v.append(s[k] / maxf(shape_max[k], 1e-4))
+		vectors.append(v)
 		data.set_pixel(i, 0, Color(v[0], v[1], v[2], v[3]))
 		data.set_pixel(i, 1, Color(v[4], v[5], cov[i], 0.0))
 
 	chars = uniq
 	box = bx
 	coverage = cov
+	shape_vectors = vectors
 	texture = ImageTexture.create_from_image(atlas)
 	data_texture = ImageTexture.create_from_image(data)
 	ready_to_use = true

@@ -4,11 +4,13 @@ A 3D toy-car racing game where every pixel on screen is a text character. The wo
 
 It is a prototype, in the spirit of 90s top-down racers, built with [Godot 4.7](https://godotengine.org/).
 
-![The car on the start line, isometric view](docs/images/iso-start.png)
+![The opening demo reel: the ASCII Racer logo decodes in over the car driving the circuit](docs/images/hero.gif)
 
-| Mid-air over the jump | Rear chase camera |
-|---|---|
-| ![Isometric view of the car in the air](docs/images/iso-jump.png) | ![Chase camera view of a sweeping corner](docs/images/chase-sweeper.png) |
+![The ASCII Racer logo, built from characters](docs/images/logo.png)
+
+| On the start line | Mid-air over the jump | Rear chase camera |
+|---|---|---|
+| ![Isometric view of the car at the start line](docs/images/iso-start.png) | ![Isometric view of the car in the air](docs/images/iso-jump.png) | ![Chase camera view of a sweeping corner](docs/images/chase-sweeper.png) |
 
 ## What's in it
 
@@ -19,6 +21,7 @@ It is a prototype, in the spirit of 90s top-down racers, built with [Godot 4.7](
 - **One circuit**: a 147-unit figure-of-eight with a bridge, a table-top jump, sweepers and a hairpin. Lap timer with current, last and best lap.
 - **Two cameras**: fixed isometric (default) and a rear chase view with right-stick look-around.
 - **Gamepad support** with analogue steering and triggers, and rumble.
+- **Demo reel**: the game opens on a self-driving reel shot from changing camera angles, with a logo intro made of characters. Press anything to play.
 
 ## Download and play
 
@@ -26,9 +29,9 @@ Grab a build from the [latest release](../../releases/latest).
 
 | Platform | File | Notes |
 |---|---|---|
-| Windows (x86-64) | `ascii-racer-0.1-windows-x86_64.zip` | Unzip and run `ascii-racer.exe`. Unsigned, so SmartScreen shows "More info → Run anyway" the first time. |
-| Linux (x86-64) | `ascii-racer-0.1-linux-x86_64.tar.gz` | Extract and run `./ascii-racer.x86_64`. |
-| macOS (Intel and Apple Silicon) | `ascii-racer-0.1-macos-universal.zip` | Unzip and open `ASCII Racer.app`. Not notarised: see [First launch on macOS](#first-launch-on-macos). On Retina displays the characters start out very small in 0.1; press `=` a few times to enlarge them. |
+| Windows (x86-64) | `ascii-racer-<version>-windows-x86_64.zip` | Unzip and run `ascii-racer.exe`. Unsigned, so SmartScreen shows "More info → Run anyway" the first time. |
+| Linux (x86-64) | `ascii-racer-<version>-linux-x86_64.tar.gz` | Extract and run `./ascii-racer.x86_64`. |
+| macOS (Intel and Apple Silicon) | `ascii-racer-<version>-macos-universal.zip` | Unzip and open `ASCII Racer.app`. Not notarised: see [First launch on macOS](#first-launch-on-macos). |
 
 The game needs a GPU with Vulkan (Windows, Linux), Direct3D 12 (Windows) or Metal (macOS). There is no web build; see [Limitations](#limitations).
 
@@ -46,12 +49,14 @@ The macOS build is not signed with an Apple Developer ID, so macOS blocks it the
 - **Download from Terminal instead of a browser.** Files fetched with `curl` or `gh` are not quarantined, so there is no prompt:
 
   ```sh
-  gh release download v0.1 --repo eiwe/ascii-racer --pattern '*macos*'
+  gh release download --repo eiwe/ascii-racer --pattern '*macos*'
   ```
 
 On macOS 14 and earlier you can also right-click the app and choose Open. That shortcut was removed in macOS 15.
 
 ## Controls
+
+The game opens on the demo reel. Press any key, button or trigger to start driving; `Esc` returns to the reel.
 
 ### Driving
 
@@ -114,18 +119,21 @@ Useful options, passed after `--`:
 
 | Command | What it does |
 |---|---|
+| `godot --path . -- --play` | Skip the demo reel and start on the grid. |
 | `godot --path . -- --preset=drift` | Start on a handling preset (`balanced`, `drift`, `grip`, `heavy`). |
 | `godot --path . -- --tune=top_speed=9,grip_road=1.4` | Override car tunables for one run. |
 | `godot --path . res://demo/demo.tscn` | The renderer demo: a small diorama with a scripted car. |
 
 ## How the renderer works
 
-The renderer lives in `ascii/` and is independent of the game. `AsciiRenderer` is a node; anything placed under it is rendered as ASCII. Each frame goes through four stages:
+The renderer lives in `ascii/` and is independent of the game. `AsciiRenderer` is a node; anything placed under it is rendered as ASCII. Each frame goes through these stages:
 
 1. **Scene**: the 3D world renders normally into an off-screen viewport at reduced resolution.
 2. **G-buffer**: a second viewport renders the same world and exports view-space normals and linear depth.
 3. **Cells**: a shader runs once per character cell, samples the colour and g-buffer over that cell, and decides which glyph to print and in what ink. This is where the five methods differ.
 4. **Compose**: a full-resolution shader draws each pixel from the glyph atlas. With squeeze below 1 the glyph boxes overlap, so up to 3×3 neighbouring cells contribute to a pixel and are combined by per-channel maximum, like overprinting.
+
+An optional **overlay layer** (`AsciiOverlay`, from `AsciiRenderer.get_overlay()`) lets a script write glyphs straight into the cell grid, on top of the scene: one glyph and ink colour per cell, plus a background that can dim or replace the scene cell behind it. The logo, the corner title and the start prompt are drawn this way, so they are made of the same characters as everything else. With the overlay off the output is unchanged.
 
 The glyph atlas is built at runtime from the font, so glyph size can change live. For each glyph it also measures overall coverage and a 2×3 "shape vector" of where the ink sits.
 
@@ -137,17 +145,18 @@ The glyph atlas is built at runtime from the font, so glyph size can change live
 | overstrike | Two glyphs per cell: ramp fill with an edge glyph printed on top. |
 | hatch | Glyph family chosen by which way the surface faces, density by brightness. |
 
-All settings are on the `AsciiSettings` resource (`ascii/ascii_settings.gd`). The defaults are the shape method, 9 px glyphs, squeeze 0.8 × 0.8, full colour and background tint 0.3.
+All settings are on the `AsciiSettings` resource (`ascii/ascii_settings.gd`). The defaults are the shape method, 9 px glyphs, squeeze 0.8 × 0.8, full colour and background tint 0.3. On a Retina Mac the game starts at 20 px glyphs instead, because 9 px is too small to read at that pixel density.
 
 ## Project layout
 
 | Path | Contents |
 |---|---|
-| `ascii/` | The renderer: `ascii_renderer.gd`, `ascii_settings.gd`, `glyph_atlas.gd`, `ascii_controls.gd` (render keys and HUD panel), `shaders/`. |
-| `game/` | The game: car physics (`car.gd`), presets and save file (`car_tuning.gd`), tuning panel, track generator (`track.gd`), cameras, lap timer, rumble, autopilot and the scripted drive test. |
+| `ascii/` | The renderer: `ascii_renderer.gd`, `ascii_settings.gd`, `glyph_atlas.gd`, `ascii_overlay.gd` (the overlay cell layer), `ascii_controls.gd` (render keys and HUD panel), `shaders/`. |
+| `game/` | The game: car physics (`car.gd`), presets and save file (`car_tuning.gd`), tuning panel, track generator (`track.gd`), cameras, lap timer, rumble, and the scripted drive test. The demo reel lives here too: `attract.gd` (reel state), `logo.gd` (logo, title and prompt), `demo_driver.gd` (the self-driving car), `shot_director.gd` and `cine_camera.gd` (the camera shots). |
 | `demo/` | The renderer demo scene and its screenshot-capture mode. |
 | `assets/` | Car and prop models, fonts. |
-| `docs/images/` | Screenshots used in this README. |
+| `docs/` | Images used in this README and the release notes for each version. |
+| `tools/` | `release.sh` (builds and publishes releases) and `make_hero.sh` (re-records the README's hero animation and logo image). |
 
 ### Editing the track
 
@@ -157,7 +166,13 @@ The circuit is generated from data at the top of `game/track.gd`, not built from
 - `ELEVATION` raises ranges of the centre line for the bridge ramps, the bridge deck and the jump.
 - Road width, kerb size, wall height and colours are constants in the same file.
 
+The demo reel's camera shots are defined relative to the track in `game/shot_director.gd` (distance along the centre line, sideways offset, height), so they follow layout changes.
+
 ![Top-down view of the circuit](docs/images/track-top-down.png)
+
+### Editing the logo
+
+Everything that defines the logo is at the top of `game/logo.gd`: the letter bitmaps, glyph choices, colours, size and position, and each step of the intro (decode, speed lines, glint, hold, exit) with its timing and an on/off switch.
 
 ### Editing the handling
 
@@ -165,7 +180,7 @@ Every tunable is an exported property on `Car` (`game/car.gd`), grouped by Chass
 
 ## Testing
 
-There are no unit tests. Two scripted modes stand in for them, and both need a real window (Godot's `--headless` mode does not render).
+There are no unit tests. Scripted modes stand in for them, and all of them need a real window (Godot's `--headless` mode does not render).
 
 **Drive test**: drives the car with scripted inputs and writes measurements and screenshots.
 
@@ -174,7 +189,7 @@ godot --path . --fixed-fps 120 -- --drivetest=/tmp/drive
 godot --path . --fixed-fps 120 -- --drivetest=/tmp/drive --preset=heavy --dtonly=spawn,jump,lap
 ```
 
-It writes `results.txt` and PNGs to the given folder and quits. It covers top speed, braking, turn radii, the drift, the jump, the bridge, kerbs, collisions, reset, gamepad bindings and autopilot laps.
+It writes `results.txt` and PNGs to the given folder and quits. It covers top speed, braking, turn radii, the drift, the jump, the bridge, kerbs, collisions, reset, gamepad bindings, autopilot laps and the demo reel's driver (`--dtonly=demo_laps`).
 
 **Look regression**: renders the demo scene with fixed presets, so renderer changes can be compared image by image.
 
@@ -182,13 +197,20 @@ It writes `results.txt` and PNGs to the given folder and quits. It covers top sp
 godot --path . res://demo/demo.tscn -- --capture=/tmp/capture
 ```
 
+**Demo reel**: checks starting from the reel and returning to it with injected input, or saves frames of the logo intro and the reel for review.
+
+```sh
+godot --path . -- --attracttest=/tmp/attract
+godot --path . --fixed-fps 60 -- --attractshots=/tmp/attract-frames --attractsize=1100x760
+```
+
 ## Building releases
 
 Install the Godot export templates matching your Godot version, then:
 
 ```sh
-tools/release.sh 0.2             # build and package all three platforms
-tools/release.sh 0.2 --publish   # also tag v0.2, push, and create the GitHub release
+tools/release.sh 0.3             # build and package all three platforms
+tools/release.sh 0.3 --publish   # also tag v0.3, push, and create the GitHub release
 ```
 
 The script sets the version, exports Windows, Linux and macOS, smoke-tests the Linux build, and writes the archives and `SHA256SUMS.txt` to `build/release/<version>/`. With `--publish` it needs a clean working tree and an authenticated `gh`; release notes are taken from `docs/releases/<version>.md` if that file exists.
@@ -202,7 +224,7 @@ godot --headless --path . --export-release "Linux" build/linux/ascii-racer.x86_6
 ## Limitations
 
 - **The handling was tuned by measurement.** The presets, drift and jump were set up against the scripted drive test, with limited hands-on driving so far.
-- **Glyphs are too small on Retina displays in 0.1.** The default glyph size is set for standard-density screens, so on a Retina Mac the characters are hard to make out until you enlarge them with `=`. A Retina-aware default is planned for the next release.
+- **The Retina default is new in 0.2.** On a Retina Mac the game now starts with larger glyphs and HUD text. If the characters still look too small or too large, adjust them with `-` and `=`.
 - **The Windows build has only been run under Wine**, not on a Windows PC.
 - **No web build.** Godot's web export only supports its Compatibility renderer, and the g-buffer stage relies on a Forward+ feature (reading scene normals in a shader). That stage would need porting.
 - **Glyph flicker.** As the camera moves, glyphs change. Grid snapping (`G`) reduces this for the static world in the isometric view but does not remove it, and it does not apply to the chase view.

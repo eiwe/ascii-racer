@@ -36,6 +36,8 @@ const KERB_HEIGHT: float = 0.06
 ## Wall beside raised road (the kit rail): thickness and height above the road.
 const WALL_THICK: float = 0.1
 const WALL_HEIGHT: float = 0.25
+## Road height above the ground at which a ramp's walls reach full height.
+const WALL_TAPER: float = 0.35
 ## Deck slab thickness under the bridge road.
 const DECK_THICK: float = 0.2
 ## Length of each red / white block on kerbs and walls.
@@ -119,7 +121,7 @@ var bounds: AABB
 ## Where the strands cross (on the lower road) and the deck road height there.
 var crossing_point: Vector3 = Vector3.ZERO
 var deck_y: float = 0.0
-## The bridge deck surface (hidden by the game while the car is under it).
+## The bridge deck's visible mesh (a halo occluder, see HaloOccluder).
 var deck_mesh: MeshInstance3D
 
 var track_body: StaticBody3D
@@ -340,8 +342,11 @@ static func _profile(kind: int, ground: float, stripe: Color) -> Array:
 			[stripe, stripe, stripe], "road", false]
 		return [left, road, right]
 	var w := WALL_THICK
-	var wt := WALL_HEIGHT
-	var bevel := wt - 0.13
+	# Walls grow out of the kerb as the road rises (full height once it is
+	# WALL_TAPER above the ground), so a raised stretch never starts with a
+	# blunt wall end in the way.
+	var wt := lerpf(KERB_HEIGHT, WALL_HEIGHT, clampf(-ground / WALL_TAPER, 0.0, 1.0)) if kind == 1 else WALL_HEIGHT
+	var bevel := wt * 0.48
 	var bottom := -DECK_THICK if kind == 2 else ground
 	var rwall := [
 		[Vector2(h, 0.0), Vector2(h, bevel), Vector2(h + w * 0.3, wt), Vector2(h + w * 0.7, wt), Vector2(h + w, bevel), Vector2(h + w, 0.0)],
@@ -363,6 +368,7 @@ func _build_road() -> void:
 	var road_faces := PackedVector3Array()
 	var wall_faces := PackedVector3Array()
 	var main := _MeshData.new()
+	var raised := _MeshData.new() # ramps and the jump: can hide the car, so it gets the halo
 	var deck := _MeshData.new()
 	var n := roundi(length / MESH_STEP)
 	var ds := length / n
@@ -390,7 +396,7 @@ func _build_road() -> void:
 			var pts_a: Array = strip_a[0]
 			var pts_b: Array = strip_b[0]
 			var cols: Array = strip_a[1]
-			var target := deck if strip_a[3] else main
+			var target := deck if strip_a[3] else (raised if kind != 0 else main)
 			var faces := road_faces if strip_a[2] == "road" else wall_faces
 			for m in pts_a.size() - 1:
 				var v00 := _at(a, pts_a[m])
@@ -409,14 +415,16 @@ func _build_road() -> void:
 			var facing := -fwd if kind == 0 else fwd # toward the kerbs
 			var h := ROAD_HALF_WIDTH
 			var w := WALL_THICK
-			var bevel := WALL_HEIGHT - 0.13
+			var lift := (row[0] as Vector3).y - GROUND_VISUAL_Y
+			var wt := lerpf(KERB_HEIGHT, WALL_HEIGHT, clampf(lift / WALL_TAPER, 0.0, 1.0))
+			var bevel := wt * 0.48
 			for side: float in [-1.0, 1.0]:
-				var q := [Vector2(h, 0.0), Vector2(h, bevel), Vector2(h + w * 0.3, WALL_HEIGHT), Vector2(h + w * 0.7, WALL_HEIGHT), Vector2(h + w, bevel), Vector2(h + w, 0.0)]
+				var q := [Vector2(h, 0.0), Vector2(h, bevel), Vector2(h + w * 0.3, wt), Vector2(h + w * 0.7, wt), Vector2(h + w, bevel), Vector2(h + w, 0.0)]
 				var v: Array[Vector3] = []
 				for pt: Vector2 in q:
 					v.append(_at(row, Vector2(pt.x * side, pt.y)))
-				main.quad_facing(v[0], v[1], v[4], v[5], COL_WALL_OUTER, facing)
-				main.quad_facing(v[1], v[2], v[3], v[4], COL_WHITE, facing)
+				raised.quad_facing(v[0], v[1], v[4], v[5], COL_WALL_OUTER, facing)
+				raised.quad_facing(v[1], v[2], v[3], v[4], COL_WHITE, facing)
 		# End caps where raised road meets the open deck (the ramp's solid end).
 		if kind != kind_next and (kind == 2 or kind_next == 2) and (kind != 0 and kind_next != 0):
 			var row: Array = b
@@ -428,9 +436,9 @@ func _build_road() -> void:
 			var q3 := _at(row, Vector2(-u, y0))
 			# Face the deck side: toward the deck row.
 			if kind == 2:
-				main.quad(q1, q0, q3, q2, COL_SIDE)
+				raised.quad(q1, q0, q3, q2, COL_SIDE)
 			else:
-				main.quad(q0, q1, q2, q3, COL_SIDE)
+				raised.quad(q0, q1, q2, q3, COL_SIDE)
 			wall_faces.append_array([q0, q2, q1, q0, q3, q2])
 	# Pillars under the deck.
 	var pillars := _MeshData.new()
@@ -455,14 +463,11 @@ func _build_road() -> void:
 	mi.name = "Road"
 	mi.mesh = main.mesh(mat)
 	add_child(mi)
-	deck_mesh = MeshInstance3D.new()
-	deck_mesh.name = "Deck"
-	deck_mesh.mesh = deck.mesh(mat)
-	add_child(deck_mesh)
-	var pm := MeshInstance3D.new()
-	pm.name = "Pillars"
-	pm.mesh = pillars.mesh(mat)
-	add_child(pm)
+	# Everything of the bridge and the jump that can stand between the iso
+	# camera and the car is an occluder with a see-through halo.
+	HaloOccluder.add_occluder(self, "Raised", raised.mesh(mat), TRACK_TINT)
+	deck_mesh = HaloOccluder.add_occluder(self, "Deck", deck.mesh(mat), TRACK_TINT)
+	HaloOccluder.add_occluder(self, "Pillars", pillars.mesh(mat), TRACK_TINT)
 
 	track_body = _static_body("TrackBody", LAYER_SURFACE, road_faces)
 	track_body.set_meta("surface", &"road")

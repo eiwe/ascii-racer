@@ -1,9 +1,13 @@
 ## Game controller: driving HUD with telemetry, lap timer, car reset, handling
 ## presets and the tuning panel, pad rumble, the iso / chase camera switch (Q,
-## pad B), the G (grid snap) and V (rumble) keys, the bridge-deck cutaway, and
-## the `--drivetest=<dir>` scripted test mode.
+## pad B), the G (grid snap) and V (rumble) keys, the see-through halo in the bridge,
+## attract mode (the demo reel it opens on; Esc returns to it), and the
+## `--drivetest=<dir>` scripted test mode.
+##   --play                     start in the game, skipping the reel
 ##   --preset=<name>            start with this handling preset
 ##   --tune=prop=value,...      then override single tunables (quick experiments)
+##   --attractshots=<dir>       capture the reel (see Attract)
+##   --attracttest=<dir>        check starting and leaving the reel (see AttractTest)
 extends Node
 
 const DRIVE_KEYS: String = """Keys  WASD drive (arrows too while tuning is closed)  Space handbrake
@@ -13,6 +17,8 @@ Pad   L-stick steer  RT throttle  LT brake  A handbrake  Y/Back reset  B camera
 ## How often the last on-track position is remembered for R.
 const SAFE_POSE_INTERVAL: float = 0.25
 const FLASH_TIME: float = 1.5
+## Default glyph size on a Retina Mac (the normal default is AsciiSettings.glyph_px).
+const RETINA_GLYPH_PX: int = 20
 
 @onready var renderer: AsciiRenderer = $AsciiRenderer
 # The renderer moves its children into its SceneViewport during its own _ready.
@@ -32,9 +38,14 @@ var chase_view: bool = false
 ## Chase view: far geometry dissolves into the void over this depth range.
 const CHASE_FADE: Vector2 = Vector2(12.0, 32.0)
 var chase_fade: bool = true
+var attract: Attract
 
 var _safe_pose: Transform3D
 var _safe_timer: float = 0.0
+var _halo_light: OmniLight3D
+var _halo_light_level: float = 0.0
+var _under_cover: bool = false
+var _cover_ray := PhysicsRayQueryParameters3D.new()
 var _pad_text: String = ""
 var _flash: String = ""
 var _flash_timer: float = 0.0
@@ -52,12 +63,25 @@ func _ready() -> void:
 	laps = LapTimer.new(track)
 	_safe_pose = world.grid_pose()
 
+	# On a Retina Mac the default 9 px glyphs are too small to read as characters.
+	if AsciiControls.display_scale() >= 2.0:
+		renderer.settings.glyph_px = RETINA_GLYPH_PX
+
 	controls = AsciiControls.new()
 	controls.renderer = renderer
 	controls.keys_text = DRIVE_KEYS
 	add_child(controls)
 	controls.zoom_requested.connect(_on_zoom)
 	chase = world.chase
+	_halo_light = OmniLight3D.new()
+	_halo_light.name = "HaloLight"
+	_halo_light.shadow_enabled = false
+	_halo_light.omni_range = HALO_LIGHT_RANGE
+	_halo_light.light_energy = 0.0
+	_halo_light.visible = false
+	world.add_child(_halo_light)
+	_cover_ray.collision_mask = Track.LAYER_SURFACE
+	_cover_ray.exclude = [car.get_rid()]
 
 	tuning = CarTuning.new(car)
 	panel = TuningPanel.new()
@@ -81,12 +105,34 @@ func _ready() -> void:
 				var p := kv.split("=")
 				car.set_indexed(p[0], str_to_var(p[1]))
 			car.refresh_tuning()
+	var scripted := false
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--drivetest="):
 			var test := DriveTest.new()
 			test.game = self
 			test.out_dir = arg.trim_prefix("--drivetest=")
 			add_child(test)
+			scripted = true
+	if not scripted and not OS.get_cmdline_user_args().has("--play"):
+		attract = Attract.new()
+		attract.game = self
+		add_child(attract)
+		attract.start(true)
+		for arg in OS.get_cmdline_user_args():
+			if arg.begins_with("--attracttest="):
+				var at := AttractTest.new()
+				at.game = self
+				at.out_dir = arg.trim_prefix("--attracttest=")
+				add_child(at)
+
+
+## Puts the car on the grid at rest with the lap timer reset (start of a game).
+func reset_to_grid() -> void:
+	_safe_pose = world.grid_pose()
+	car.teleport(_safe_pose)
+	laps.reset()
+	camera.snap_to_target()
+	chase.snap_to_target()
 
 
 ## , and . : iso zoom, or chase distance in the chase view.
@@ -105,7 +151,6 @@ func set_chase_view(on: bool) -> void:
 	if on:
 		chase.current = true
 		chase.snap_to_target()
-		track.deck_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	else:
 		camera.current = true
 	renderer.distance_fade = CHASE_FADE if on and chase_fade else Vector2.ZERO
@@ -120,24 +165,40 @@ func flash(text: String) -> void:
 	_flash_timer = FLASH_TIME
 
 
-## Hides the bridge deck surface (keeping its walls and its shadow) while the
-## car is under it, so the iso camera can see the car.
-const DECK_CUTAWAY_RADIUS: float = 6.0
+## Height of the halo's target above the car's origin (about the middle of the car).
+const HALO_TARGET_HEIGHT: float = 0.2
+## A shadowless light that follows the car while it is under cover in the iso view.
+const HALO_LIGHT_ENERGY: float = 1.4
+const HALO_LIGHT_RANGE: float = 2.4
+const HALO_LIGHT_HEIGHT: float = 0.9
+const HALO_LIGHT_FADE: float = 5.0 ## per second
 
 
-func _update_deck_cutaway() -> void:
-	if chase_view:
-		return # the chase camera keeps the car in view by itself
-	var p := car.global_position
-	var c := track.crossing_point
-	var under := Vector2(p.x - c.x, p.z - c.z).length() < DECK_CUTAWAY_RADIUS and p.y < track.deck_y - 0.8
-	var want := GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY if under else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	if track.deck_mesh.cast_shadow != want:
-		track.deck_mesh.cast_shadow = want
+## The see-through halo in bridges and other occluders (HaloOccluder): follows
+## the car, and only for the isometric camera; perspective cameras keep the car
+## in view by themselves (line of sight).
+func _update_halo(delta: float) -> void:
+	var iso := renderer.scene_viewport.get_camera_3d() == camera
+	var origin := car.get_global_transform_interpolated().origin
+	HaloOccluder.set_target(origin + Vector3.UP * HALO_TARGET_HEIGHT, HaloOccluder.RADIUS if iso else 0.0)
+	# Under cover the car sits in the occluder's shadow and would be a dim shape
+	# in the hole: light it, and the patch of road around it, while it is there.
+	_halo_light_level = move_toward(_halo_light_level, 1.0 if iso and _under_cover else 0.0, delta * HALO_LIGHT_FADE)
+	_halo_light.visible = _halo_light_level > 0.01
+	_halo_light.light_energy = HALO_LIGHT_ENERGY * _halo_light_level
+	_halo_light.global_position = origin + Vector3.UP * HALO_LIGHT_HEIGHT
+
+
+## True when a drivable surface (a bridge deck) is overhead. Physics frames only.
+func _check_under_cover() -> void:
+	var from := car.global_position + Vector3.UP * 0.6
+	_cover_ray.from = from
+	_cover_ray.to = from + Vector3.UP * 4.0
+	_under_cover = not world.get_world_3d().direct_space_state.intersect_ray(_cover_ray).is_empty()
 
 
 func _physics_process(delta: float) -> void:
-	_update_deck_cutaway()
+	_check_under_cover()
 	laps.update(car.global_position, delta)
 	_safe_timer += delta
 	if _safe_timer >= SAFE_POSE_INTERVAL:
@@ -157,6 +218,7 @@ func reset_car() -> void:
 
 
 func _process(delta: float) -> void:
+	_update_halo(delta)
 	_flash_timer = maxf(_flash_timer - delta, 0.0)
 	var mods := tuning.modified_count()
 	var preset := ">> %s <<" % _flash.to_upper() if _flash_timer > 0.0 else "preset %s%s" % [tuning.current, " (modified)" if mods > 0 else ""]
@@ -193,6 +255,11 @@ func telemetry() -> String:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not controls.enabled:
+		return
+	var esc := event as InputEventKey
+	if attract != null and not attract.active and esc != null and esc.pressed and not esc.echo and esc.keycode == KEY_ESCAPE:
+		attract.start(false) # back to the demo reel
+		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed(&"camera_toggle"):
 		set_chase_view(not chase_view)

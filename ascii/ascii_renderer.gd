@@ -39,6 +39,9 @@ const COMPOSE_SHADER: Shader = preload("res://ascii/shaders/compose.gdshader")
 ## for orthographic cameras).
 var distance_fade: Vector2 = Vector2.ZERO
 
+## Whether the overlay cell layer (get_overlay()) is drawn.
+var overlay_enabled: bool = false
+
 var raw_view: bool = false:
 	set(v):
 		raw_view = v
@@ -66,6 +69,7 @@ var _compose_rect: ColorRect
 var _compose_material: ShaderMaterial
 var _display: TextureRect
 var _atlas_key: Array = []
+var _overlay: AsciiOverlay
 
 
 func _ready() -> void:
@@ -79,6 +83,18 @@ func _ready() -> void:
 	settings.changed.connect(_on_settings_changed)
 	get_viewport().size_changed.connect(_relayout)
 	_rebuild_atlas()
+
+
+## The overlay cell layer (created on first use, sized to the grid) and turns
+## it on. See AsciiOverlay.
+func get_overlay() -> AsciiOverlay:
+	if _overlay == null:
+		_overlay = AsciiOverlay.new()
+		_overlay.atlas = atlas
+		_overlay.resize(cols, rows)
+		_cells_material.set_shader_parameter("overlay_tex", _overlay.texture)
+	overlay_enabled = true
+	return _overlay
 
 
 func is_atlas_ready() -> bool:
@@ -310,6 +326,10 @@ func _relayout() -> void:
 	cols = ceili(float(output_size.x) / pitch.x)
 	rows = ceili(float(output_size.y) / pitch.y)
 	cell_viewport.size = Vector2i(cols * SLOTS, rows)
+	if _overlay != null:
+		_overlay.resize(cols, rows)
+		_overlay.clear()
+		_cells_material.set_shader_parameter("overlay_tex", _overlay.texture)
 	_cells_rect.size = Vector2(cell_viewport.size)
 
 	var m := _cells_material
@@ -373,3 +393,7 @@ func _process(_delta: float) -> void:
 	_cells_material.set_shader_parameter("fade_end", fade.y)
 	_cells_material.set_shader_parameter("world_per_uv", world_per_uv)
 	_cells_material.set_shader_parameter("view_up", basis.transposed() * Vector3.UP)
+	var ov := overlay_enabled and _overlay != null and not raw_view
+	_cells_material.set_shader_parameter("overlay_on", ov)
+	if ov:
+		_overlay.commit()

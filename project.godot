@@ -175,3 +175,26 @@ common/max_physics_steps_per_frame=12
 [rendering]
 
 textures/vram_compression/import_etc2_astc=true
+
+[shader_globals]
+
+halo_target={
+"type": "vec3",
+"value": Vector3(0, 0, 0)
+}
+halo_radius={
+"type": "float",
+"value": 0.0
+}
+halo_softness={
+"type": "float",
+"value": 0.4
+}
+halo_margin={
+"type": "float",
+"value": 0.5
+}
+halo_dither={
+"type": "float",
+"value": 0.09
+}

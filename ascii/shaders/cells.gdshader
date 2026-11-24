@@ -36,6 +36,10 @@ uniform vec3 view_up = vec3(0.0, 1.0, 0.0);
 // between fade_begin and fade_end. fade_end = 0 turns it off (the default).
 uniform float fade_begin = 0.0;
 uniform float fade_end = 0.0;
+// Overlay cell layer (AsciiOverlay): (grid.x * 2) x grid.y texels; texel 2x =
+// ink RGB + glyph index + 1 (0 = none), texel 2x + 1 = background RGB + cover.
+uniform bool overlay_on = false;
+uniform sampler2D overlay_tex : filter_nearest, repeat_disable;
 
 uniform float exposure = 1.0;
 uniform float contrast = 1.0;
@@ -133,6 +137,32 @@ int hatch_pick(int fam, float l) {
 	return hatch_front[i];
 }
 
+// One slot of a cell with the overlay layer applied over the scene's choice.
+vec4 overlay_cell(ivec2 cell, int slot, int g0, vec3 ink, int g1, vec3 ink1, vec3 bg) {
+	vec4 o_ink = texelFetch(overlay_tex, ivec2(cell.x * 2, cell.y), 0);
+	vec4 o_bg = texelFetch(overlay_tex, ivec2(cell.x * 2 + 1, cell.y), 0);
+	float cover = o_bg.a;
+	ink *= 1.0 - cover;
+	ink1 *= 1.0 - cover;
+	bg = mix(bg, o_bg.rgb, cover);
+	if (cover >= 0.999) {
+		g0 = 0;
+		g1 = 0;
+	}
+	int og = int(o_ink.a * 255.0 + 0.5);
+	if (og > 0) {
+		g0 = og - 1;
+		ink = o_ink.rgb;
+		g1 = 0;
+	}
+	if (slot == 0) {
+		return vec4(ink, float(g0) / 255.0);
+	} else if (slot == 1) {
+		return vec4(ink1, float(g1) / 255.0);
+	}
+	return vec4(bg, 1.0);
+}
+
 void fragment() {
 	ivec2 t = ivec2(floor(UV * vec2(float(grid.x * 3), float(grid.y))));
 	int slot = t.x % 3;
@@ -206,6 +236,9 @@ void fragment() {
 		COLOR = vec4(0.0);
 		if (slot == 2) {
 			COLOR = vec4(0.0, 0.0, 0.0, 1.0);
+		}
+		if (overlay_on) {
+			COLOR = overlay_cell(cell, slot, 0, vec3(0.0), 0, vec3(0.0), vec3(0.0));
 		}
 	} else {
 		// --- edges: discontinuous neighbour pairs, orientation by PCA of their midpoints ---
@@ -357,6 +390,10 @@ void fragment() {
 		} else {
 			vec3 bg = color_mode == 1 ? mono_ink * luma(avg) : avg;
 			COLOR = vec4(bg * bg_strength, 1.0);
+		}
+		if (overlay_on) {
+			vec3 bg = color_mode == 1 ? mono_ink * luma(avg) : avg;
+			COLOR = overlay_cell(cell, slot, g0, ink, g1, ink1, bg * bg_strength);
 		}
 	}
 }

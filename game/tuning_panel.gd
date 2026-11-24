@@ -52,7 +52,7 @@ func _ready() -> void:
 	hud.add_child(panel)
 	_label = Label.new()
 	_label.add_theme_font_override("font", HUD_FONT)
-	_label.add_theme_font_size_override("font_size", 13)
+	_label.add_theme_font_size_override("font_size", roundi(13.0 * AsciiControls.display_scale()))
 	_label.add_theme_color_override("font_color", Color(0.85, 0.85, 0.85))
 	panel.add_child(_label)
 	hud.visible = false

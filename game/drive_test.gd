@@ -157,7 +157,7 @@ func _run() -> void:
 		if arg.begins_with("--dtonly="):
 			only = arg.trim_prefix("--dtonly=")
 	for t: String in ["spawn", "accel_brake", "turns", "handbrake", "drift", "feel", "offroad", "kerbs", "tree", "cones", "jump", "bridge", "reset_bridge", "keys",
-			"pad", "panel", "rumble", "lap", "drift_lap", "drift_shot", "panel_shot", "chase", "top_down", "grid_snap"]:
+			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "top_down", "grid_snap"]:
 		if only == "" or t in only.split(","):
 			await call("_test_" + t)
 	log_line("\n[summary] preset %s" % game.tuning.current)
@@ -1745,10 +1745,10 @@ func _test_bridge() -> void:
 		var c := track.crossing_point
 		if Vector2(car.global_position.x - c.x, car.global_position.z - c.z).length() < 2.0:
 			min_gap = minf(min_gap, track.deck_y - Track.DECK_THICK - (car.global_position.y + 0.45))
-			cut = cut or track.deck_mesh.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+			cut = cut or HaloOccluder.radius_now > 0.0
 			if not shot:
 				shot = true
-				await _shot("24_under_bridge_cutaway.png")
+				await _shot("24_under_bridge_halo.png")
 		if _speed() < v_prev - 0.5:
 			hits += 1
 		v_prev = _speed()
@@ -1756,9 +1756,9 @@ func _test_bridge() -> void:
 			break
 	_stop_line(ap)
 	await _frames(2)
-	log_line("  passed under: clearance above the car roof %.2f, deck cut away while under %s, sudden speed losses %d; ends at s %.1f, speed %.2f, deck shown again %s" % [
-		min_gap, cut, hits, prog, _speed(), track.deck_mesh.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_ON])
-	_m["bridge_under"] = "clearance %.2f, cutaway %s, speed losses %d" % [min_gap, cut, hits]
+	log_line("  passed under: clearance above the car roof %.2f, halo open in the iso view while under %s, sudden speed losses %d; ends at s %.1f, speed %.2f" % [
+		min_gap, cut, hits, prog, _speed()])
+	_m["bridge_under"] = "clearance %.2f, halo %s, speed losses %d" % [min_gap, cut, hits]
 	_inputs(0.0, 0.0, 1.0, false)
 	await _frames(60)
 
@@ -1955,5 +1955,181 @@ func _test_chase() -> void:
 	_m["chase_fps"] = "%.0f chase / %.0f iso" % [fps[0], fps[1]]
 	game.set_chase_view(false)
 	game.controls.enabled = false
+	_inputs(0.0, 0.0, 1.0, false)
+	await _frames(30)
+
+
+
+## Steering trace metrics: [mean |rate| (1/s), reversals per second].
+func _steer_metrics(trace: PackedFloat32Array) -> Array:
+	var rate := 0.0
+	var rev := 0
+	var last_sign := 0.0
+	for i in range(1, trace.size()):
+		var d := (trace[i] - trace[i - 1]) * 120.0
+		rate += absf(d)
+		if absf(d) > 0.05:
+			if last_sign != 0.0 and signf(d) != last_sign:
+				rev += 1
+			last_sign = signf(d)
+	var secs := maxf(trace.size() / 120.0, 1e-3)
+	return [rate / maxf(trace.size() - 1, 1), rev / secs]
+
+
+## The attract-mode demo driver over five laps, against the centre-line autopilot.
+func _test_demo_laps() -> void:
+	var laps_wanted := 5
+	log_line("\n[demo laps] the demo-reel driver (DemoDriver), %d laps from the grid" % laps_wanted)
+	_inputs(0.0, 0.0, 0.0, false)
+	car.teleport(world.grid_pose())
+	game.laps.reset()
+	camera.snap_to_target()
+	await _frames(30)
+	var d := DemoDriver.new()
+	d.car = car
+	d.track = track
+	d.rng_seed = 7
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--demotune="):
+			for kv in arg.trim_prefix("--demotune=").split(",", false):
+				var p := kv.split("=")
+				d.set(p[0], float(p[1]))
+	add_child(d)
+	d.reset_requested.connect(func() -> void:
+		log_line("    quiet reset at s %.1f" % d.progress)
+		game.reset_car()
+		d.restart())
+	var laps: LapTimer = game.laps
+	var completed: Array[float] = []
+	laps.lap_completed.connect(func(t: float) -> void: completed.append(t))
+	var trace := PackedFloat32Array()
+	var off := 0
+	var air := 0
+	var max_slip := 0.0
+	var was_off := false
+	var hairpin_drift := {}
+	var jump_air := {}
+	var frames := 0
+	while completed.size() < laps_wanted and frames < 120 * 60 * laps_wanted:
+		await _frames(1)
+		frames += 1
+		if not laps.started:
+			continue
+		trace.append(car.steer_input)
+		var is_off := car.wheels_grounded > car.wheels_on_road
+		if is_off:
+			off += 1
+			if not was_off:
+				log_line("    off the road at s %.1f, lateral %.2f, speed %.2f, steer %.2f" % [d.progress,
+					track.lateral_offset(car.global_position, d.progress), _speed(), car.steer_input])
+		was_off = is_off
+		if car.wheels_grounded == 0:
+			air += 1
+			if d.progress > 22.0 and d.progress < 33.0:
+				jump_air[laps.lap] = int(jump_air.get(laps.lap, 0)) + 1
+		max_slip = maxf(max_slip, absf(car.slip_angle))
+		if car.drift_state == Car.Drift.DRIFT and d.progress > 112.0 and d.progress < 132.0:
+			hairpin_drift[laps.lap] = int(hairpin_drift.get(laps.lap, 0)) + 1
+	var times := completed.map(func(t: float) -> String: return "%.2f" % t)
+	var mean := 0.0
+	for t in completed:
+		mean += t
+	mean /= maxf(completed.size(), 1)
+	var spread := 0.0
+	for t in completed:
+		spread = maxf(spread, absf(t - mean))
+	var dm := _steer_metrics(trace)
+	var hp := PackedStringArray()
+	var jp := PackedStringArray()
+	for l in range(1, laps_wanted + 1):
+		hp.append("%.2f" % (int(hairpin_drift.get(l, 0)) / 120.0))
+		jp.append("%.2f" % (int(jump_air.get(l, 0)) / 120.0))
+	log_line("  laps %s (mean %.2f, +-%.2f); %d frames with a wheel off the road, %d airborne; %d quiet resets; %d drifts; peak slip %.1f deg" % [
+		", ".join(times), mean, spread, off, air, d.resets, d.drifts, rad_to_deg(max_slip)])
+	log_line("  per lap: hairpin drift seconds %s; jump air seconds %s" % [", ".join(hp), ", ".join(jp)])
+	log_line("  steering: mean |rate| %.2f /s, %.2f reversals/s" % [dm[0], dm[1]])
+	_m["demo_laps"] = "%s (mean %.2f +-%.2f), off %d, resets %d, drifts %d, peak slip %.0f" % [", ".join(times), mean, spread, off, d.resets, d.drifts, rad_to_deg(max_slip)]
+	_m["demo_per_lap"] = "hairpin drift s %s; jump air s %s" % [", ".join(hp), ", ".join(jp)]
+	d.queue_free()
+	# The old centre-line autopilot over two laps, for the steering comparison.
+	_inputs(0.0, 0.0, 0.0, false)
+	car.teleport(world.grid_pose())
+	laps.reset()
+	await _frames(30)
+	var ap := Autopilot.new()
+	ap.car = car
+	ap.track = track
+	add_child(ap)
+	var trace2 := PackedFloat32Array()
+	var done := 0
+	var cb := func(_t: float) -> void: done += 1
+	laps.lap_completed.connect(func(_t: float) -> void: trace2.append(INF))
+	frames = 0
+	while frames < 120 * 50:
+		await _frames(1)
+		frames += 1
+		if laps.started:
+			trace2.append(car.steer_input)
+		if trace2.count(INF) >= 2:
+			break
+	var clean := PackedFloat32Array()
+	for v in trace2:
+		if v != INF:
+			clean.append(v)
+	var am := _steer_metrics(clean)
+	log_line("  centre-line autopilot: mean |rate| %.2f /s, %.2f reversals/s" % [am[0], am[1]])
+	_m["demo_steering"] = "demo |rate| %.2f/s, %.2f reversals/s vs autopilot %.2f/s, %.2f reversals/s" % [dm[0], dm[1], am[0], am[1]]
+	ap.enabled = false
+	ap.queue_free()
+	_inputs(0.0, 0.0, 1.0, false)
+	await _frames(30)
+
+
+
+## The see-through halo in the bridge, iso view: the car parked at points along
+## the lower road through the crossing, driving through, and on top of the deck.
+func _test_halo() -> void:
+	log_line("\n[halo] iso view, see-through halo in the bridge (radius %.2f, rim %.2f, dither %.2f)" % [
+		HaloOccluder.RADIUS, HaloOccluder.SOFTNESS, HaloOccluder.DITHER])
+	game.set_chase_view(false)
+	var keep_snap := camera.snap_to_grid
+	var sc := track.progress(track.crossing_point)
+	for d: float in [-3.0, -1.5, 0.0, 1.0, 2.0, 3.0, 4.5]:
+		await _place_on_track(sc + d)
+		await _frames(30)
+		camera.snap_to_target()
+		await _frames(2)
+		await _shot("40_halo_parked_%+.1f.png" % d)
+		if d == 1.0:
+			await _shot("40_halo_parked_%+.1f_raw.png" % d, true)
+			HaloOccluder.set_target(Vector3.ZERO, 0.0)
+			game.set_process(false)
+			await _shot("40_halo_parked_%+.1f_off.png" % d)
+			game.set_process(true)
+	log_line("  parked at the crossing %+.1f .. %+.1f: shots 40_halo_parked_*" % [-3.0, 4.5])
+	# Driving through at speed: a frame every 0.1 s.
+	await _place_on_track(sc - 6.0, 0.0, 5.5)
+	var ap := _start_line(5.5)
+	var n := 0
+	var prog := track.progress(car.global_position)
+	for i in 300:
+		await _frames(1)
+		prog = track.progress(car.global_position, prog)
+		if i % 12 == 0 and prog > sc - 3.0 and prog < sc + 6.0:
+			await _shot("41_halo_drive_%02d_s%+.1f.png" % [n, prog - sc])
+			n += 1
+		if prog > sc + 6.0 and prog < sc + 20.0:
+			break
+	_stop_line(ap)
+	log_line("  driving through at 5.5 u/s: %d shots 41_halo_drive_*" % n)
+	# On top of the deck: nothing may be cut.
+	await _place_on_track(0.5)
+	await _frames(30)
+	camera.snap_to_target()
+	await _frames(2)
+	await _shot("42_halo_on_deck.png")
+	await _shot("42_halo_on_deck_raw.png", true)
+	log_line("  on top of the deck: shot 42_halo_on_deck")
+	camera.snap_to_grid = keep_snap
 	_inputs(0.0, 0.0, 1.0, false)
 	await _frames(30)

@@ -1,0 +1,19 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://game/game.gd" id="1_game"]
+[ext_resource type="Script" path="res://ascii/ascii_renderer.gd" id="2_renderer"]
+[ext_resource type="Script" path="res://ascii/ascii_settings.gd" id="3_settings"]
+[ext_resource type="Script" path="res://game/world.gd" id="4_world"]
+
+[sub_resource type="Resource" id="Resource_settings"]
+script = ExtResource("3_settings")
+
+[node name="Game" type="Node"]
+script = ExtResource("1_game")
+
+[node name="AsciiRenderer" type="Node" parent="."]
+script = ExtResource("2_renderer")
+settings = SubResource("Resource_settings")
+
+[node name="World" type="Node3D" parent="AsciiRenderer"]
+script = ExtResource("4_world")

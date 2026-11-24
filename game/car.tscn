@@ -1,0 +1,36 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://game/car.gd" id="1_car"]
+[ext_resource type="PackedScene" path="res://assets/kenney_toy-car-kit/vehicle-racer.glb" id="2_model"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_body"]
+size = Vector3(0.5, 0.2, 0.84)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_cabin"]
+size = Vector3(0.36, 0.1, 0.4)
+
+[sub_resource type="PhysicsMaterial" id="PhysicsMaterial_car"]
+friction = 0.3
+bounce = 0.1
+
+[node name="Car" type="RigidBody3D"]
+collision_layer = 2
+collision_mask = 5
+mass = 1.0
+physics_material_override = SubResource("PhysicsMaterial_car")
+continuous_cd = true
+script = ExtResource("1_car")
+
+[node name="Body" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.24, 0)
+shape = SubResource("BoxShape3D_body")
+
+[node name="Cabin" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.39, 0.05)
+shape = SubResource("BoxShape3D_cabin")
+
+[node name="Lean" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.15, 0)
+
+[node name="Model" parent="Lean" instance=ExtResource("2_model")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.15, 0)

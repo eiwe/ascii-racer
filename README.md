@@ -28,9 +28,28 @@ Grab a build from the [latest release](../../releases/latest).
 |---|---|---|
 | Windows (x86-64) | `ascii-racer-0.1-windows-x86_64.zip` | Unzip and run `ascii-racer.exe`. Unsigned, so SmartScreen shows "More info → Run anyway" the first time. |
 | Linux (x86-64) | `ascii-racer-0.1-linux-x86_64.tar.gz` | Extract and run `./ascii-racer.x86_64`. |
-| macOS (Intel and Apple Silicon) | `ascii-racer-0.1-macos-universal.zip` | Unzip and open `ASCII Racer.app`. Not notarised: approve it under System Settings → Privacy & Security on first launch. On Retina displays the characters start out very small in 0.1; press `=` a few times to enlarge them. |
+| macOS (Intel and Apple Silicon) | `ascii-racer-0.1-macos-universal.zip` | Unzip and open `ASCII Racer.app`. Not notarised: see [First launch on macOS](#first-launch-on-macos). On Retina displays the characters start out very small in 0.1; press `=` a few times to enlarge them. |
 
 The game needs a GPU with Vulkan (Windows, Linux), Direct3D 12 (Windows) or Metal (macOS). There is no web build; see [Limitations](#limitations).
+
+### First launch on macOS
+
+The macOS build is not signed with an Apple Developer ID, so macOS blocks it the first time. Use any one of these:
+
+- **Approve it in Settings.** Open `ASCII Racer.app` and dismiss the warning. Then open System Settings → Privacy & Security, scroll to the message about ASCII Racer, and click **Open Anyway**. You only need to do this once.
+- **Remove the quarantine mark in Terminal.** After unzipping, run this once, adjusting the path to wherever the app is:
+
+  ```sh
+  xattr -dr com.apple.quarantine ~/Downloads/"ASCII Racer.app"
+  ```
+
+- **Download from Terminal instead of a browser.** Files fetched with `curl` or `gh` are not quarantined, so there is no prompt:
+
+  ```sh
+  gh release download v0.1 --repo eiwe/ascii-racer --pattern '*macos*'
+  ```
+
+On macOS 14 and earlier you can also right-click the app and choose Open. That shortcut was removed in macOS 15.
 
 ## Controls
 

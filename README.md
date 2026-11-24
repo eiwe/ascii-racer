@@ -28,7 +28,7 @@ Grab a build from the [latest release](../../releases/latest).
 |---|---|---|
 | Windows (x86-64) | `ascii-racer-0.1-windows-x86_64.zip` | Unzip and run `ascii-racer.exe`. Unsigned, so SmartScreen shows "More info → Run anyway" the first time. |
 | Linux (x86-64) | `ascii-racer-0.1-linux-x86_64.tar.gz` | Extract and run `./ascii-racer.x86_64`. |
-| macOS (Intel and Apple Silicon) | `ascii-racer-0.1-macos-universal.zip` | Unzip and open `ASCII Racer.app`. Not notarised: approve it under System Settings → Privacy & Security on first launch. **Untested**, see below. |
+| macOS (Intel and Apple Silicon) | `ascii-racer-0.1-macos-universal.zip` | Unzip and open `ASCII Racer.app`. Not notarised: approve it under System Settings → Privacy & Security on first launch. On Retina displays the characters start out very small in 0.1; press `=` a few times to enlarge them. |
 
 The game needs a GPU with Vulkan (Windows, Linux), Direct3D 12 (Windows) or Metal (macOS). There is no web build; see [Limitations](#limitations).
 
@@ -183,7 +183,7 @@ godot --headless --path . --export-release "Linux" build/linux/ascii-racer.x86_6
 ## Limitations
 
 - **The handling was tuned by measurement.** The presets, drift and jump were set up against the scripted drive test, with limited hands-on driving so far.
-- **The macOS build is untested.** It is built from Linux and has never been run on a Mac.
+- **Glyphs are too small on Retina displays in 0.1.** The default glyph size is set for standard-density screens, so on a Retina Mac the characters are hard to make out until you enlarge them with `=`. A Retina-aware default is planned for the next release.
 - **The Windows build has only been run under Wine**, not on a Windows PC.
 - **No web build.** Godot's web export only supports its Compatibility renderer, and the g-buffer stage relies on a Forward+ feature (reading scene normals in a shader). That stage would need porting.
 - **Glyph flicker.** As the camera moves, glyphs change. Grid snapping (`G`) reduces this for the static world in the isometric view but does not remove it, and it does not apply to the chase view.

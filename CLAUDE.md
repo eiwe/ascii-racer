@@ -29,4 +29,4 @@ It builds Windows, Linux and macOS from this machine, smoke-tests the Linux buil
 - Before publishing, write the release notes to `docs/releases/<version>.md` and commit them; the script uses that file, or GitHub's generated notes if it is missing.
 - `--publish` needs a clean working tree and refuses to reuse an existing tag.
 - Publishing is outward-facing: only pass `--publish` when the owner has asked for the release to go out.
-- The macOS build cannot be tested here and is not notarised; say so in the notes.
+- The macOS build cannot be run on this machine (the owner tests it on a Mac) and is not notarised; mention the first-launch approval step in the notes.

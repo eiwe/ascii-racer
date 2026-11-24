@@ -195,4 +195,4 @@ godot --headless --path . --export-release "Linux" build/linux/ascii-racer.x86_6
 - **Font**: [Hack](https://sourcefoundry.org/hack/), patched by [Nerd Fonts](https://www.nerdfonts.com/); MIT and Bitstream Vera licences. See `assets/fonts/LICENSE-Hack.md`.
 - **Engine**: [Godot Engine](https://godotengine.org/), MIT.
 
-No licence has been chosen yet for the project's own code and scenes.
+The project's own code and scenes are released under the [MIT License](LICENSE). The bundled models and fonts keep their own licences, listed above.

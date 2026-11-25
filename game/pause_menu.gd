@@ -4,9 +4,9 @@
 ## lap timer, the reel's driver; no input reaches the car); the music keeps
 ## playing, lowered and muffled, and the car's sounds go silent.
 ##
-## In a race: Resume, Restart, Music, SFX, Sound check, Return to title, Quit.
-## From the reel: Start race, Music, SFX, Sound check, Quit (closing it goes
-## back to the reel).
+## In a race: Resume, Restart, Opponent, Zoom, Volume, Music, SFX, Sound check,
+## Return to title, Quit. From the reel: Start race, Opponent, Zoom, Volume,
+## Music, SFX, Sound check, Quit (closing it goes back to the reel).
 ##
 ## Keys: Up/Down or W/S move, Left/Right or A/D adjust, Enter or Space choose,
 ## Esc close. Pad: Start opens and closes, D-pad or left stick move and adjust,
@@ -17,10 +17,10 @@ extends Node
 signal opened
 signal closed
 
-enum Item { RESUME, RESTART, START_RACE, VOLUME, MUSIC, SFX, SOUND_CHECK, TITLE, QUIT }
+enum Item { RESUME, RESTART, START_RACE, OPPONENT, ZOOM, VOLUME, MUSIC, SFX, SOUND_CHECK, TITLE, QUIT }
 const LABELS: Dictionary = {
 	Item.RESUME: "RESUME", Item.RESTART: "RESTART", Item.START_RACE: "START RACE",
-	Item.VOLUME: "VOLUME", Item.MUSIC: "MUSIC", Item.SFX: "SFX", Item.SOUND_CHECK: "SOUND CHECK",
+	Item.OPPONENT: "OPPONENT", Item.ZOOM: "ZOOM", Item.VOLUME: "VOLUME", Item.MUSIC: "MUSIC", Item.SFX: "SFX", Item.SOUND_CHECK: "SOUND CHECK",
 	Item.TITLE: "TO TITLE", Item.QUIT: "QUIT",
 }
 ## Sound check: roles and how they are named.
@@ -55,6 +55,7 @@ var _t: float = 0.0
 var _stick := Vector2i.ZERO
 var _hold_dir := Vector2i.ZERO
 var _hold_t: float = 0.0
+var _opponent_at_open: int = 0
 
 
 func _ready() -> void:
@@ -71,11 +72,13 @@ func open(reel: bool) -> void:
 		items.append(Item.START_RACE)
 	else:
 		items.append_array([Item.RESUME, Item.RESTART])
-	items.append_array([Item.VOLUME, Item.MUSIC, Item.SFX, Item.SOUND_CHECK])
+	items.append_array([Item.OPPONENT, Item.ZOOM, Item.VOLUME, Item.MUSIC, Item.SFX, Item.SOUND_CHECK])
 	if not reel and game.get("attract") != null:
 		items.append(Item.TITLE)
-	items.append(Item.QUIT)
+	if not OS.has_feature("web"):
+		items.append(Item.QUIT) # a browser page cannot quit
 	selected = 0
+	_opponent_at_open = audio.opponent_level
 	is_open = true
 	_t = 0.0
 	get_tree().paused = true
@@ -93,6 +96,9 @@ func close() -> void:
 	audio.stop_audition()
 	audio.save_settings()
 	get_tree().paused = false
+	# The opponent setting applies on closing (in a race; the reel is solo).
+	if not in_reel and audio.opponent_level != _opponent_at_open and game.has_method("update_opponent"):
+		game.update_opponent(_opponent_at_open == 0)
 	var ov := renderer.get_overlay()
 	if ov != null:
 		ov.clear()
@@ -197,6 +203,10 @@ func _move(dir: Vector2i) -> void:
 		selected = posmod(selected + dir.y, items.size())
 		return
 	match items[selected]:
+		Item.OPPONENT:
+			audio.set_opponent_level(clampi(audio.opponent_level + dir.x, 0, 5))
+		Item.ZOOM:
+			audio.set_zoom_setting(clampi(audio.zoom_setting + dir.x, 0, FollowCamera.ZOOM_STEPS.size()))
 		Item.VOLUME:
 			audio.set_master_volume(audio.master_volume + dir.x / float(AudioDirector.SLIDER_STEPS))
 		Item.MUSIC:
@@ -225,8 +235,11 @@ func _choose() -> void:
 			game.attract.start(false)
 		Item.QUIT:
 			audio.quit()
-		Item.VOLUME, Item.MUSIC, Item.SFX:
+		Item.OPPONENT, Item.VOLUME, Item.MUSIC, Item.SFX:
 			_move(Vector2i.RIGHT)
+		Item.ZOOM:
+			# Enter cycles, back to AUTO after the farthest step.
+			audio.set_zoom_setting((audio.zoom_setting + 1) % (FollowCamera.ZOOM_STEPS.size() + 1))
 
 
 # --- drawing ------------------------------------------------------------------------
@@ -291,6 +304,23 @@ func _draw() -> void:
 		var vx := lx + label_w + 4
 		var vy := y
 		match it:
+			Item.OPPONENT:
+				var v := "OFF" if audio.opponent_level == 0 else str(audio.opponent_level)
+				var txt := "< %s >" % v
+				if big:
+					_logo.draw_mini(txt, vx, vy, Vector2i.ONE, 0, func(_f: float) -> Color: return ink, 0.0)
+				else:
+					ov.text(vx, vy, txt, ink)
+				if sel:
+					ov.text(vx, vy + (5 if big else 1), "applies when the menu closes" if not in_reel else "for the next race", INK_DIM)
+			Item.ZOOM:
+				var txt := "< %s >" % zoom_text(audio.zoom_setting)
+				if big:
+					_logo.draw_mini(txt, vx, vy, Vector2i.ONE, 0, func(_f: float) -> Color: return ink, 0.0)
+				else:
+					ov.text(vx, vy, txt, ink)
+				if sel:
+					ov.text(vx, vy + (5 if big else 1), "iso view: AUTO fits the window; higher numbers show more", INK_DIM)
 			Item.VOLUME:
 				_slider(ov, vx, vy, bar_w, audio.master_volume, sel, big)
 			Item.MUSIC:
@@ -312,6 +342,13 @@ func _draw() -> void:
 	if hint.length() > w:
 		hint = "Arrows  Enter  Esc" + (" [MUTED]" if audio.muted else "")
 	ov.text(x0 + (w - hint.length()) / 2, y0 + h - 1, hint, INK_DIM)
+
+
+## The ZOOM row's value: AUTO or the step's multiplier.
+static func zoom_text(z: int) -> String:
+	if z <= 0:
+		return "AUTO"
+	return "%.2f" % FollowCamera.ZOOM_STEPS[clampi(z - 1, 0, FollowCamera.ZOOM_STEPS.size() - 1)]
 
 
 ## A volume bar: one row of cells, or (big) three rows with the value in block

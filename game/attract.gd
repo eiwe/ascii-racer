@@ -82,6 +82,8 @@ func _enter() -> void:
 	_player_values = g.tuning.capture()
 	g.tuning.select(REEL_PRESET)
 	g.car.nitro_enabled = false # the reel's driver does not use it
+	g.race_start.cancel() # no start lights in the reel
+	g.remove_opponent() # the reel is solo
 	g.car.nitro_input = false
 	g.car.teleport(g.world.grid_pose())
 	g.laps.reset()
@@ -141,8 +143,9 @@ func _begin_play() -> void:
 	g.tuning.current = _player_preset
 	g.car.nitro_enabled = true
 	g.reset_to_grid()
+	g.update_opponent(true)
 	g.set_chase_view(false)
-	g.controls.hud.visible = true
+	g.controls.hud.visible = false # minimised; its legend shows in the corner
 	g.controls.enabled = true
 	g.panel.enabled = true
 	g.rumble.set_enabled(_rumble_was)

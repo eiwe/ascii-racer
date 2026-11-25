@@ -43,6 +43,11 @@ var renderer: AsciiRenderer
 var attract: Attract
 ## False hides the bar and the effects (the overlay is left alone).
 var enabled: bool = true
+## Race standing from the opponent ("P1 +1.8"), drawn bottom left; "" = none.
+var race_text: String = ""
+const RACE_INK_LEAD: Color = Color("ffe45c")
+const RACE_INK_TRAIL: Color = Color("ff7a5c")
+var _logo := AsciiLogo.new()
 
 var _t: float = 0.0
 var _rng := RandomNumberGenerator.new()
@@ -73,6 +78,8 @@ func _process(delta: float) -> void:
 		if renderer.scene_viewport.get_camera_3d() is ChaseCamera:
 			_draw_speed_lines(ov)
 	_draw_bar(ov)
+	if race_text != "":
+		_draw_race(ov)
 
 
 func _draw_bar(ov: AsciiOverlay) -> void:
@@ -124,6 +131,19 @@ func _draw_bar(ov: AsciiOverlay) -> void:
 	elif refilling and int(_t * 4.0) % 2 == 0:
 		for y in [y0, y1]:
 			ov.put_char(bx + edge, y, "+", INK_REFILL)
+
+
+## The race standing in block letters at the bottom left, on a dark plate.
+func _draw_race(ov: AsciiOverlay) -> void:
+	_logo.overlay = ov
+	var w := AsciiLogo.mini_width(race_text, Vector2i.ONE, 0)
+	var x0 := 3
+	var y0 := ov.rows - 1 - BAR_MARGIN - 5
+	for y in range(y0 - 1, y0 + 6):
+		for x in range(x0 - 2, x0 + w + 1):
+			ov.cover(x, y, 0.85, BG)
+	var ink := RACE_INK_LEAD if race_text.begins_with("P1") else RACE_INK_TRAIL
+	_logo.draw_mini(race_text, x0, y0, Vector2i.ONE, 0, func(_f: float) -> Color: return ink, 0.0)
 
 
 ## Cell (fractional) of a world point, or (-1, -1) when it is behind the camera.

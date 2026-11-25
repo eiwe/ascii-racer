@@ -2,10 +2,13 @@
 """Builds the game's sound files from the raw downloads (kept out of the repo).
 
     tools/prepare_audio.py <raw dir> [--out assets/audio] [--standins <dir>]
+    tools/prepare_audio.py --beeps [--out assets/audio]
 
 <raw dir> is the sourcing folder's `raw/` (see assets/audio/CREDITS.md for where
 each file came from). Writes assets/audio/sfx/*.ogg and assets/audio/sounds.cfg,
-the table that tells the game which file plays which role. With --standins it
+the table that tells the game which file plays which role. The start
+lights' two beeps are synthesised tones (a beep is a tone); --beeps writes
+only those (and their table entries). With --standins it
 instead writes synthetic test tones and a matching table into <dir> (for
 measuring the engine's pitch handling; never shipped).
 
@@ -112,14 +115,56 @@ def make_loop(x, length, period=None):
     return body
 
 
+# Start-light beeps: [role, frequency Hz, length s, level dBFS peak, game gain dB].
+BEEPS = [
+    ["start_beep", 880.0, 0.16, -6.0, -8.0],
+    ["start_go", 1320.0, 0.55, -5.0, -6.0],
+]
+
+
+def beep(freq, length, peak_db):
+    """A soft-edged tone with a little second and third harmonic (less
+    piercing than a pure sine), a 5 ms attack and an exponential tail."""
+    t = np.arange(int(length * SR)) / SR
+    x = np.sin(2 * np.pi * freq * t) + 0.18 * np.sin(4 * np.pi * freq * t) + 0.06 * np.sin(6 * np.pi * freq * t)
+    env = np.minimum(t / 0.005, 1.0) * np.exp(-t / (length * 0.45))
+    env *= np.minimum((length - t) / 0.02, 1.0)
+    x = x * env
+    return (x / np.abs(x).max() * 10 ** (peak_db / 20))[:, None]
+
+
+def write_beeps(out, table_lines):
+    sfx = os.path.join(out, "sfx")
+    os.makedirs(sfx, exist_ok=True)
+    for role, f, l, pk, g in BEEPS:
+        encode(beep(f, l, pk), os.path.join(sfx, role + ".ogg"), 6)
+        print(f"{role}: synthesised {f:.0f} Hz tone, {l:.2f} s, peak {pk:.1f} dBFS")
+        table_lines += [f"[{role}]", f'file="sfx/{role}.ogg"', f"gain_db={g:.1f}", ""]
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("raw")
+    ap.add_argument("raw", nargs="?")
+    ap.add_argument("--beeps", action="store_true")
     ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "audio"))
     ap.add_argument("--standins")
     a = ap.parse_args()
     if a.standins:
         return standins(a.standins)
+    if a.beeps:
+        # Only the beeps: write them and add their sections to the table if missing.
+        lines = []
+        write_beeps(a.out, lines)
+        path = os.path.join(a.out, "sounds.cfg")
+        table = open(path).read() if os.path.exists(path) else ""
+        for role, _f, _l, _p, g in BEEPS:
+            if f"[{role}]" not in table:
+                table = table.rstrip("\n") + "\n\n" + "\n".join([f"[{role}]", f'file="sfx/{role}.ogg"', f"gain_db={g:.1f}"]) + "\n"
+        open(path, "w").write(table)
+        print("updated", path)
+        return
+    if not a.raw:
+        ap.error("raw dir needed")
     sfx = os.path.join(a.out, "sfx")
     os.makedirs(sfx, exist_ok=True)
     table = ["; Which file plays which role (see game/audio/sound_table.gd). Written by",
@@ -159,6 +204,7 @@ def main():
         encode(seg, os.path.join(sfx, role + ".ogg"), 6)
         print(f"{role}: {src} {start:.2f}+{length:.2f} s, peak {db(pk):.1f} -> {SHOT_PEAK_DB:.1f} dBFS")
         table += [f"[{role}]", f'file="sfx/{role}.ogg"', "gain_db=0.0", ""]
+    write_beeps(a.out, table)
     table += ["[music_menu]", 'file="music/menu.mp3"', "xfade_at=68.0", "xfade=1.0", "gain_db=0.0", "",
         "[music_race]", 'file="music/race.mp3"', "xfade_at=192.5", "xfade=2.0", "gain_db=0.0", ""]
     with open(os.path.join(a.out, "sounds.cfg"), "w") as f:

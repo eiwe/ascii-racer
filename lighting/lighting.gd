@@ -3,9 +3,11 @@
 ## car, a sun that moves), as a table of modes. The game world and the demo scene
 ## both build their light with this, so the demo capture can shoot every mode.
 ##
-## Mode 1 ("classic") is the original look and is fixed: same environment, same
-## sun, same shadow filter, nothing else touched. The other modes are
-## experiments; their sun can be swung round and raised with set_sun().
+## Mode 1 ("sunset") is the default, by the owner's choice. "classic" (mode 3)
+## is the original look and is fixed: same environment, same sun, same shadow
+## filter, nothing else touched; it is the reference the renderer's output is
+## compared against byte for byte. In the other modes the sun (the moon at
+## night) can be swung round and raised with set_sun().
 ##
 ## Use: `var l := Lighting.new(); l.build(world)` instead of creating a
 ## WorldEnvironment and a sun, then register what the modes act on (ground,
@@ -15,7 +17,7 @@ extends Node
 
 signal changed
 
-## The modes, in key order (1-5). Keys of an entry:
+## The modes, in key order (1-7). Keys of an entry:
 ##   name             shown on the HUD
 ##   classic          true = the original lighting, nothing else applies
 ##   sun_az, sun_el   sun direction, degrees (azimuth: 0 = north / -z, 90 = east / +x)
@@ -30,7 +32,20 @@ signal changed
 ##   hatch            draw shadow as its own texture (AsciiRenderer.shadow_hatch)
 ##   glint            glossy bodywork on the car so it catches the sun, plus a rim light
 ##   sweep            the sun swings round once a minute (shadows sweep over the scene)
+##   sky              a sky instead of the black void, drawn as characters like
+##                    the rest (AsciiRenderer.sky_enabled): "sunset" (sunset
+##                    clouds, sunset_sky.gdshader) or "night" (moon and stars,
+##                    night_sky.gdshader); perspective views fade into it with
+##                    depth fog over "fog" (begin, end; default SKY_FOG)
+##   night            every car carries lights (CarLights: headlight beam with
+##                    shadows, head and tail lamps, a red glow behind)
 const MODES: Array[Dictionary] = [
+	{"name": "sunset", "sun_az": 240.0, "sun_el": 14.0, "sun_color": Color(1.0, 0.72, 0.48), "sun_energy": 3.6,
+		"ambient_color": Color(0.42, 0.45, 0.75), "ambient_energy": 0.32, "ground": Color(0.2, 0.21, 0.17), "track": 1.25,
+		"shadow_hard": true, "shadow_distance": 60.0, "shadow_size": 8192, "glint": true, "sky": "sunset"},
+	{"name": "night", "sun_az": 200.0, "sun_el": 38.0, "sun_color": Color(0.62, 0.72, 1.0), "sun_energy": 1.0,
+		"ambient_color": Color(0.36, 0.46, 0.9), "ambient_energy": 0.55, "ground": Color(0.15, 0.18, 0.2), "track": 1.6,
+		"shadow_hard": true, "shadow_distance": 60.0, "shadow_size": 8192, "sky": "night", "fog": Vector2(18.0, 55.0), "night": true},
 	{"name": "classic", "classic": true},
 	{"name": "low sun", "sun_az": 240.0, "sun_el": 22.0, "sun_color": Color(1.0, 0.8, 0.58), "sun_energy": 3.4,
 		"ambient_color": Color(0.42, 0.52, 0.85), "ambient_energy": 0.3, "ground": Color(0.2, 0.21, 0.17), "track": 1.25,
@@ -45,6 +60,28 @@ const MODES: Array[Dictionary] = [
 		"ambient_color": Color(0.42, 0.52, 0.85), "ambient_energy": 0.3, "ground": Color(0.2, 0.21, 0.17), "track": 1.25,
 		"shadow_hard": true, "shadow_distance": 60.0, "shadow_size": 8192, "sweep": true},
 ]
+## The mode a scene starts in (sunset).
+const DEFAULT_MODE: int = 0
+
+## The Compatibility renderer (web build) adds its separate light passes (lights
+## with shadows) in sRGB space, so lit surfaces come out brighter than under
+## Forward+; its lights also fall off differently. These factors on the mode's
+## energies were fitted so its ASCII output (the demo capture) matches the
+## Forward+ one as closely as one number per light can (by mode name: [ambient,
+## sun, headlight beam, tail glow]; the four low-sun modes share sunset's). Not
+## used under Forward+.
+const COMPAT_ENERGY: Dictionary = {
+	"sunset": [1.0, 0.55, 1.0, 1.0],
+	"night": [0.6, 0.5, 0.45, 0.15],
+	"classic": [0.85, 0.5, 1.0, 1.0],
+	"low sun": [1.0, 0.55, 1.0, 1.0],
+	"hatched": [1.0, 0.55, 1.0, 1.0],
+	"glint": [1.0, 0.55, 1.0, 1.0],
+	"sweep": [1.0, 0.55, 1.0, 1.0],
+}
+static var compat: bool = RenderingServer.get_current_rendering_method() == "gl_compatibility"
+## Index of classic (the byte-identity reference).
+const CLASSIC_MODE: int = 2
 
 ## The classic (original) lighting values.
 const CLASSIC_FROM: Vector3 = Vector3(-0.45, 1.6, 0.9)
@@ -63,7 +100,7 @@ var car: Node3D
 var renderer: AsciiRenderer
 
 var mode: int = 0
-## The adjustable sun of modes 2-5 (degrees).
+## The adjustable sun (the moon at night) of every mode but classic (degrees).
 var sun_az: float = 240.0
 var sun_el: float = 22.0
 
@@ -73,6 +110,7 @@ var _rim: DirectionalLight3D
 var _glint_materials: Dictionary = {} ## MeshInstance3D -> Array of [surface, original material]
 var _shadow_size_classic: int = 4096
 var _specular_classic: float = 1.0
+var _positional_filter: int = -1
 ## True once set_sun() moved the sun: switching modes then keeps it.
 var _sun_moved: bool = false
 
@@ -101,6 +139,17 @@ func build(parent: Node3D) -> void:
 	we.environment = env
 	parent.add_child(we)
 	environment = env
+	if RenderingServer.get_current_rendering_method() == "gl_compatibility":
+		# The Compatibility renderer (web build) draws shadowed lights as extra
+		# passes blended into the sRGB output, so they add up encoded and the
+		# scene comes out much too bright. A post-process makes it render into
+		# a linear buffer first, where they add up as in Forward+: glow at zero
+		# strength is that post-process, with no visible effect of its own.
+		env.glow_enabled = true
+		env.glow_intensity = 0.001
+		env.glow_strength = 1.0
+		env.glow_bloom = 0.0
+		env.glow_blend_mode = Environment.GLOW_BLEND_MODE_ADDITIVE
 
 	# Light from high up, a little from screen-left and toward the camera, so
 	# top / left / right faces of the blocky models get clearly different values.
@@ -115,6 +164,7 @@ func build(parent: Node3D) -> void:
 	name = "Lighting"
 	parent.add_child(self)
 	_shadow_size_classic = ProjectSettings.get_setting("rendering/lights_and_shadows/directional_shadow/size", 4096)
+	_positional_filter = ProjectSettings.get_setting("rendering/lights_and_shadows/positional_shadow/soft_shadow_filter_quality", 2)
 
 
 func set_ground(g: GeometryInstance3D) -> void:
@@ -172,11 +222,11 @@ func set_mode(index: int) -> void:
 	if classic:
 		sun.basis = Basis.looking_at(-CLASSIC_FROM.normalized(), Vector3.UP)
 		sun.light_color = Color.WHITE
-		sun.light_energy = CLASSIC_ENERGY
+		sun.light_energy = CLASSIC_ENERGY * _compat_factor(1)
 		sun.light_specular = _specular_classic
 		sun.directional_shadow_max_distance = CLASSIC_SHADOW_DISTANCE
 		environment.ambient_light_color = CLASSIC_AMBIENT
-		environment.ambient_light_energy = CLASSIC_AMBIENT_ENERGY
+		environment.ambient_light_energy = CLASSIC_AMBIENT_ENERGY * _compat_factor(0)
 		RenderingServer.directional_soft_shadow_filter_set_quality(ProjectSettings.get_setting(
 			"rendering/lights_and_shadows/directional_shadow/soft_shadow_filter_quality"))
 		RenderingServer.directional_shadow_atlas_set_size(_shadow_size_classic, true)
@@ -188,14 +238,14 @@ func set_mode(index: int) -> void:
 		sun_el = m.get("sun_el", sun_el) if not _sun_moved else sun_el
 		_aim_sun()
 		sun.light_color = m.get("sun_color", Color.WHITE)
-		sun.light_energy = m.get("sun_energy", CLASSIC_ENERGY)
+		sun.light_energy = m.get("sun_energy", CLASSIC_ENERGY) * _compat_factor(1)
 		# No specular from the sun: it depends on the view vector, which shifts
 		# with the camera even in ortho, and on the brighter ground it tipped
 		# whole bands of cells across a glyph threshold when the camera moved.
 		sun.light_specular = 0.0
 		sun.directional_shadow_max_distance = m.get("shadow_distance", CLASSIC_SHADOW_DISTANCE)
 		environment.ambient_light_color = m.get("ambient_color", CLASSIC_AMBIENT)
-		environment.ambient_light_energy = m.get("ambient_energy", CLASSIC_AMBIENT_ENERGY)
+		environment.ambient_light_energy = m.get("ambient_energy", CLASSIC_AMBIENT_ENERGY) * _compat_factor(0)
 		RenderingServer.directional_soft_shadow_filter_set_quality(
 			RenderingServer.SHADOW_QUALITY_HARD if m.get("shadow_hard", false) else ProjectSettings.get_setting(
 				"rendering/lights_and_shadows/directional_shadow/soft_shadow_filter_quality"))
@@ -206,10 +256,12 @@ func set_mode(index: int) -> void:
 	if renderer != null:
 		renderer.shadow_hatch = not classic and m.get("hatch", false)
 	_set_glint(not classic and m.get("glint", false))
+	_set_sky("" if classic else String(m.get("sky", "")), m.get("fog", SKY_FOG))
+	_set_night(not classic and m.get("night", false))
 	changed.emit()
 
 
-## Swings / raises the sun of modes 2-5 (degrees); classic ignores it.
+## Swings / raises the sun (the moon at night) (degrees); classic ignores it.
 func set_sun(azimuth: float, elevation: float) -> void:
 	if is_classic():
 		return
@@ -240,10 +292,10 @@ func set_mode_frozen(index: int, sweep_seconds: float = 15.0) -> void:
 ## Sun keys: degrees per second while held.
 const SUN_SWING_RATE: float = 45.0
 const SUN_RAISE_RATE: float = 15.0
-const SUN_KEYS_HELP: String = "J L swing sun  I K raise / lower sun (lighting 2-5)"
+const SUN_KEYS_HELP: String = "J L swing sun  I K raise / lower sun (the moon at night; not in classic)"
 
 
-## J / L swing the sun round, I / K raise and lower it (modes 2-5). Call every
+## J / L swing the sun round, I / K raise and lower it (not in classic). Call every
 ## frame while the scene takes keys.
 func update_sun_keys(delta: float) -> void:
 	if is_classic():
@@ -267,11 +319,12 @@ func _aim_sun() -> void:
 		_aim_rim()
 
 
-## HUD text: mode name and, for modes 2-5, the sun.
+## HUD text: mode name and, but for classic, the sun (or moon).
 func describe() -> String:
 	if is_classic():
-		return "lighting 1 %s" % mode_name()
-	return "lighting %d %s   sun az %d el %d" % [mode + 1, mode_name(), roundi(sun_az), roundi(sun_el)]
+		return "lighting %d %s" % [mode + 1, mode_name()]
+	return "lighting %d %s   %s az %d el %d" % [mode + 1, mode_name(), "moon" if MODES[mode].get("night", false) else "sun",
+		roundi(sun_az), roundi(sun_el)]
 
 
 # --- glint ----------------------------------------------------------------------
@@ -374,7 +427,116 @@ const SWEEP_PERIOD: float = 60.0
 var sweep_running: bool = true
 
 
+# --- sky --------------------------------------------------------------------------
+
+const SKY_SHADERS: Dictionary = {
+	"sunset": preload("res://lighting/sunset_sky.gdshader"),
+	"night": preload("res://lighting/night_sky.gdshader"),
+}
+## Perspective views fade into the sky over this depth range (world units).
+const SKY_FOG: Vector2 = Vector2(14.0, 42.0)
+## The Compatibility renderer (web build) does not take the fog's colour from
+## the sky as Forward+ does (aerial perspective: each pixel fogs toward the sky
+## in its own direction, which for the ground is the dark sky below the
+## horizon). It fogs toward one flat colour instead (grey by default, which drew
+## a pale band of characters along the horizon), so it gets the colour distant
+## ground reaches under Forward+, measured from its frames.
+const COMPAT_FOG_COLOR: Dictionary = {
+	"sunset": Color8(33, 24, 56),
+	"night": Color8(15, 22, 50),
+}
+
+var _skies: Dictionary = {} ## name -> Sky
+var _sky_on: bool = false
+
+
+## `kind`: a key of SKY_SHADERS, or "" for none (the black void).
+func _set_sky(kind: String, fog: Vector2 = SKY_FOG) -> void:
+	var on := kind != ""
+	_sky_on = on
+	if on:
+		if not _skies.has(kind):
+			var mat := ShaderMaterial.new()
+			mat.shader = SKY_SHADERS[kind]
+			var sky := Sky.new()
+			sky.sky_material = mat
+			_skies[kind] = sky
+		environment.sky = _skies[kind]
+		environment.background_mode = Environment.BG_SKY
+		environment.fog_mode = Environment.FOG_MODE_DEPTH
+		environment.fog_depth_begin = fog.x
+		environment.fog_depth_end = fog.y
+		if compat:
+			environment.fog_light_color = COMPAT_FOG_COLOR.get(kind, Color(0.5, 0.5, 0.5))
+		environment.fog_density = 1.0
+		environment.fog_aerial_perspective = 1.0
+		environment.fog_sky_affect = 0.0
+	else:
+		environment.background_mode = Environment.BG_COLOR
+		environment.sky = null
+		environment.fog_enabled = false
+	if renderer != null:
+		renderer.sky_enabled = on
+		renderer.sky_ramp_only = kind == "night"
+
+
+# --- night ------------------------------------------------------------------------
+
+## Cars in this group get CarLights while night is on (Car adds itself; the
+## demo scene adds its model).
+const LIT_CARS: StringName = &"lit_cars"
+
+var _night: bool = false
+
+
+func _set_night(on: bool) -> void:
+	_night = on
+	if not is_inside_tree():
+		return
+	# Hard shadows from the headlights too (stable glyphs), as for the sun.
+	RenderingServer.positional_soft_shadow_filter_set_quality(
+		RenderingServer.SHADOW_QUALITY_HARD if on else _positional_filter as RenderingServer.ShadowQuality)
+	if not on:
+		for c in get_tree().get_nodes_in_group(LIT_CARS):
+			var l := c.find_child("CarLights", true, false)
+			if l != null:
+				l.get_parent().remove_child(l)
+				l.queue_free()
+	else:
+		_light_cars()
+
+
+## Gives every car in LIT_CARS its lights (once).
+func _light_cars() -> void:
+	for c: Node in get_tree().get_nodes_in_group(LIT_CARS):
+		if c.find_child("CarLights", true, false) != null:
+			continue
+		var l := CarLights.new()
+		l.car = c as Car # null for a plain model (the demo scene's car)
+		l.beam_scale = _compat_factor(2)
+		l.glow_scale = _compat_factor(3)
+		var lean := c.get_node_or_null("Lean") as Node3D
+		if lean != null:
+			l.position = -lean.position # car-local positions, but leaning with the body
+			lean.add_child(l)
+		else:
+			c.add_child(l)
+
+
+## The mode's Compatibility factor `i` (see COMPAT_ENERGY); 1 under Forward+.
+func _compat_factor(i: int) -> float:
+	if not compat:
+		return 1.0
+	var f: Array = COMPAT_ENERGY.get(mode_name(), [1.0, 1.0, 1.0, 1.0])
+	return f[i]
+
+
 func _process(delta: float) -> void:
+	if _night:
+		_light_cars() # cars that arrived since (the opponent)
+	if _sky_on:
+		var cam := get_viewport().get_camera_3d()
+		environment.fog_enabled = cam != null and cam.projection == Camera3D.PROJECTION_PERSPECTIVE
 	if _glint_material != null:
 		var cam := get_viewport().get_camera_3d()
 		var ortho := cam != null and cam.projection == Camera3D.PROJECTION_ORTHOGONAL

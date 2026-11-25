@@ -18,11 +18,15 @@ It is a prototype, in the spirit of 90s top-down racers, built with [Godot 4.7](
 - **Car physics**: a rigid body on four raycast wheels with spring suspension, tyre grip limits and a friction circle, running on Jolt at 120 Hz.
 - **Arcade drift**: handbrake while steering kicks the car into a held, steerable drift with a small exit boost. Drifting also refills the nitro.
 - **Nitro**: a 1.5-second tank on Left Shift or a left-stick click, with an on-screen bar. Burning it in a corner is a mistake you can make.
-- **A limit worth respecting**: the circuit can no longer be driven flat. Overdrive a corner and the car slides; a countersteer can catch it, and ignoring it spins you.
+- **A limit worth respecting**: the tight corners (the hairpin, the two 90-degree right-handers) need real braking, and overdriving one runs you wide. The default `balanced` setup is planted; the `drift` preset is the one whose rear steps out on the throttle or a lift, where a countersteer can catch it and ignoring it spins you.
 - **Four handling presets** (`balanced`, `drift`, `grip`, `heavy`) plus a live tuning panel; your own setup saves as `custom`.
-- **One circuit**: a 147-unit figure-of-eight with a bridge, a table-top jump, sweepers and a hairpin. Lap timer with current, last and best lap.
+- **One circuit**: a 147-unit figure-of-eight with a bridge, a table-top jump, sweepers and a hairpin. Lap timer with current, last and best lap (the first lap from the lights is a standing start; without the lights, as in the scripted tests, it starts at the line).
 - **Two cameras**: fixed isometric (default) and a rear chase view with right-stick look-around.
-- **Five lighting modes** on keys `1`–`5`: the classic look, a low golden-hour sun with long shadows, hatched shadows, a glint on the car, and a moving sun.
+- **Seven lighting modes** on keys `1`–`7`: a sunset sky with clouds (the default), night with headlights, the classic look, a low golden-hour sun with long shadows, hatched shadows, a glint on the car, and a moving sun.
+- **Night racing** (lighting `2`, experimental): moonlight with the track edges still readable, headlight beams that light the road ahead and throw moving shadows, red tail lamps that brighten under braking, on both cars and in the demo reel, under a sky with a moon and stars.
+- **Isometric zoom that fits the window**: in the default AUTO zoom, a 16:9 or narrower window looks further ahead and zooms out a little, so it shows at least as much road ahead as an ultrawide. Fixed zoom steps are in the pause menu.
+- **F1-style start lights**: every start from the grid (from the reel, a restart, or turning the opponent on) runs five red lights with a beep each, a random hold, then lights out with a higher beep. The cars are held until then (the throttle still revs the engine), the race music and the lap timer start at lights out, and the opponent reacts after about 0.45 s at level 1 down to about 0.15 s at level 5.
+- **An AI opponent**: a red speedster that starts beside you on the grid and laps freely, at a difficulty from 1 to 5 (or off) set in the pause menu. It drives the same car with the same `balanced` setup as you, with no catch-up: higher levels simply drive closer to the limit, and levels 4 and 5 drift the hairpin and use nitro. Contact is solid, and your position and the gap in seconds show at the bottom left.
 - **Sound and music**: a recorded petrol engine with a simulated gearbox, tyre squeal, landings, impacts and nitro, plus menu and race music. A pause menu on `Esc` has volume controls that are saved between runs.
 - **Gamepad support** with analogue steering and triggers, and rumble.
 - **Demo reel**: the game opens on a self-driving reel shot from changing camera angles, with a logo intro made of characters. Press anything to play.
@@ -36,8 +40,24 @@ Grab a build from the [latest release](../../releases/latest).
 | Windows (x86-64) | `ascii-racer-<version>-windows-x86_64.zip` | Unzip and run `ascii-racer.exe`. Unsigned, so SmartScreen shows "More info → Run anyway" the first time. |
 | Linux (x86-64) | `ascii-racer-<version>-linux-x86_64.tar.gz` | Extract and run `./ascii-racer.x86_64`. |
 | macOS (Intel and Apple Silicon) | `ascii-racer-<version>-macos-universal.zip` | Unzip and open `ASCII Racer.app`. Not notarised: see [First launch on macOS](#first-launch-on-macos). |
+| Web browser (experimental) | `ascii-racer-<version>-web.zip` | Unzip and serve the folder from a web server (opening `index.html` from disk does not work); see [Web build](#web-build). |
 
-The game needs a GPU with Vulkan (Windows, Linux), Direct3D 12 (Windows) or Metal (macOS). There is no web build; see [Limitations](#limitations).
+The desktop builds need a GPU with Vulkan (Windows, Linux), Direct3D 12 (Windows) or Metal (macOS). The web build needs a desktop browser with WebGL 2 (current Chrome or Firefox).
+
+### Web build
+
+The web build is the same game running in the browser on Godot's Compatibility renderer (WebGL 2), which the desktop builds do not use. To try it locally:
+
+```sh
+tools/serve_web.sh            # serves build/web/ at http://127.0.0.1:8060/
+```
+
+It runs from any static web host without special headers (it is the single-threaded build). The download is about 22 MB zipped; the browser loads a 40 MB WebAssembly engine (10 MB if the server compresses it) and a 12 MB game data file. Known differences from the desktop builds:
+
+- **The picture is close but not identical.** The Compatibility renderer lights scenes differently (it adds shadowed lights in sRGB space, uses simpler diffuse shading and its own light falloff), so the lighting modes are rebalanced for it. Classic and the isometric views match closely; night and the chase view's far distance differ most. The normal and depth information the character shapes come from is drawn a different way, with the same result.
+- **Sound starts after the first key press or click** (browsers block audio until the page is used), so the reel opens silent.
+- **No Quit** in the menu (close the tab), no command-line options, and settings and custom tuning are kept in the browser's storage for the site.
+- **Esc** opens the menu and also leaves the browser's fullscreen. Gamepads work through the browser's gamepad support where it has it; rumble may not.
 
 ### First launch on macOS
 
@@ -60,7 +80,7 @@ On macOS 14 and earlier you can also right-click the app and choose Open. That s
 
 ## Controls
 
-The game opens on the demo reel. Press any key, button or trigger to start driving. `Esc` (or Start on a gamepad) opens the menu: resume, restart, volume sliders for master, music and effects, a sound check that plays each sound on its own, return to the title, and quit.
+The game opens on the demo reel. Press any key, button or trigger to start driving. `Esc` (or Start on a gamepad) opens the menu: resume, restart, the opponent's difficulty (off or 1 to 5, applied when the menu closes), the isometric zoom (AUTO, or a fixed 0.85 to 1.50 times the base framing), volume sliders for master, music and effects, a sound check that plays each sound on its own, return to the title, and quit. The difficulty, zoom and volumes are saved between runs. Opening the menu during the start lights pauses them; they carry on where they were when it closes (Restart begins them again). The reset key does nothing under the lights.
 
 ### Driving
 
@@ -91,6 +111,8 @@ To drift, press the handbrake while steering at speed. Hold it, or tap it and ke
 | Reset it to the preset | Backspace | X |
 | Save as `custom` | F5 | Right-stick click |
 
+The debug HUD (speed, lap times, telemetry, render settings and every key) starts minimised: a small `H  debug menu` note in the top left corner shows how to open it. It is hidden in the demo reel and the menu.
+
 While the tuning panel is open the arrow keys navigate it, so drive with WASD.
 
 ![The tuning panel and telemetry](docs/images/tuning-panel.png)
@@ -99,18 +121,18 @@ While the tuning panel is open the arrow keys navigate it, so drive with WASD.
 
 | Key | Action |
 |---|---|
-| `1`–`5` | Lighting mode: classic, low sun, hatched, glint, sweep |
-| `J` / `L` | Swing the sun round (lighting 2–5) |
-| `I` / `K` | Raise / lower the sun (lighting 2–5) |
+| `1`–`7` | Lighting mode: sunset, night, classic, low sun, hatched, glint, sweep |
+| `J` / `L` | Swing the sun round (the moon at night; not in classic) |
+| `I` / `K` | Raise / lower the sun (the moon at night; not in classic) |
 | `[` / `]` | Squeeze characters together / apart (both axes) |
 | `;` / `'` | Vertical squeeze only |
 | `-` / `=` | Glyph size |
-| `,` / `.` | Zoom (isometric) or camera distance (chase) |
+| `,` / `.` | Zoom (isometric: the base that AUTO and the menu's steps multiply) or camera distance (chase) |
 | `C` | Full colour or mono ink |
 | `B` | Background tint behind glyphs |
 | `G` | Snap the isometric camera to the character grid |
 | `Tab` | Raw 3D view, for comparison |
-| `H` | Hide the HUD |
+| `H` | Show / hide the debug HUD |
 | `P` | Save a screenshot to the user data folder |
 
 ## Run from source
@@ -129,7 +151,7 @@ Useful options, passed after `--`:
 | Command | What it does |
 |---|---|
 | `godot --path . -- --play` | Skip the demo reel and start on the grid. |
-| `godot --path . -- --lighting=low-sun` | Start in a lighting mode (name or number 1–5). |
+| `godot --path . -- --lighting=low-sun` | Start in a lighting mode (name or number 1–7; default 1 sunset). |
 | `godot --path . -- --preset=drift` | Start on a handling preset (`balanced`, `drift`, `grip`, `heavy`). |
 | `godot --path . -- --tune=top_speed=9,grip_road=1.4` | Override car tunables for one run. |
 | `godot --path . res://demo/demo.tscn` | The renderer demo: a small diorama with a scripted car. |
@@ -139,7 +161,7 @@ Useful options, passed after `--`:
 The renderer lives in `ascii/` and is independent of the game. `AsciiRenderer` is a node; anything placed under it is rendered as ASCII. Each frame goes through these stages:
 
 1. **Scene**: the 3D world renders normally into an off-screen viewport at reduced resolution.
-2. **G-buffer**: a second viewport renders the same world and exports view-space normals and linear depth.
+2. **G-buffer**: a second viewport renders the same world and exports view-space normals and linear depth. Under Forward+ (the desktop builds) a full-screen pass reads them from the depth and normal buffers. The Compatibility renderer (the web build) has no normal buffer, so there every visible mesh gets an unshaded twin that only the g-buffer camera sees and that writes its normal and depth directly (`ascii/shaders/gbuffer_twin.gdshader`).
 3. **Cells**: a shader runs once per character cell, samples the colour and g-buffer over that cell, and decides which glyph to print and in what ink.
 4. **Compose**: a full-resolution shader draws each pixel from the glyph atlas. With squeeze below 1 the glyph boxes overlap, so up to 3×3 neighbouring cells contribute to a pixel and are combined by per-channel maximum, like overprinting.
 
@@ -157,11 +179,13 @@ Lighting is defined as data in `lighting/lighting.gd`: each mode is a table of s
 
 | Key | Mode | What it does |
 |---|---|---|
-| `1` | classic | The original lighting and the default. Its output is kept pixel-identical from release to release. |
-| `2` | low sun | A low, warm sun with long hard-edged shadows and a cool fill. |
-| `3` | hatched | Low sun, with shadow drawn as its own texture: sparse `/` hatching in a cool ink and a line glyph along the shadow edge. Uses an extra lighting-only render pass, which exists only while this mode is on. |
-| `4` | glint | Low sun, plus a small highlight that slides over the car's bodywork and a cool rim light. |
-| `5` | sweep | Low sun that circles once a minute, so the shadows swing round. |
+| `1` | sunset | The default. Low sun with the glint, under a sunset sky: a gradient from deep blue to an orange horizon, the sun itself, and fair-weather cumulus. The sky is drawn as characters like everything else, and far scenery fades into it. It only shows where the camera sees sky (the chase view and the reel's cinematic shots), not in the isometric view. |
+| `2` | night | Experimental. Cool moonlight with a fill strong enough that the road, kerbs and walls still draw as characters beyond the headlights; each car has a shadowed headlight beam (a wide warm pool reaching about a braking distance ahead), glowing head and tail lamps and a red glow behind that brightens under braking. In the chase and reel views, a night sky with the moon (where the moonlight comes from, so `J`/`L`/`I`/`K` move it) and stars; the sky cells use fill glyphs only, so a star stays one dot instead of turning into letters. |
+| `3` | classic | The original lighting (the default up to 0.3). Its output is kept pixel-identical from release to release. |
+| `4` | low sun | A low, warm sun with long hard-edged shadows and a cool fill. |
+| `5` | hatched | Low sun, with shadow drawn as its own texture: sparse `/` hatching in a cool ink and a line glyph along the shadow edge. Uses an extra lighting-only render pass, which exists only while this mode is on. |
+| `6` | glint | Low sun, plus a small highlight that slides over the car's bodywork and a cool rim light. |
+| `7` | sweep | Low sun that circles once a minute, so the shadows swing round. |
 
 Light shafts were tried and dropped: Godot's volumetric fog does not work with the orthographic camera, and in the chase view the shafts did not survive the conversion to characters.
 
@@ -170,8 +194,8 @@ Light shafts were tried and dropped: Godot's volumetric fog does not work with t
 | Path | Contents |
 |---|---|
 | `ascii/` | The renderer: `ascii_renderer.gd`, `ascii_settings.gd`, `glyph_atlas.gd`, `ascii_overlay.gd` (the overlay cell layer), `ascii_controls.gd` (render keys and HUD panel), `shaders/`. |
-| `game/` | The game: car physics and nitro (`car.gd`), presets and save file (`car_tuning.gd`), tuning panel, track generator (`track.gd`), cameras, lap timer, rumble, the nitro bar (`nitro_hud.gd`), the pause menu (`pause_menu.gd`), sound (`audio/`: the sample table, mixer, music looping and the car's engine, tyre and impact sounds), and the scripted drive test. The demo reel lives here too: `attract.gd` (reel state), `logo.gd` (logo, title and prompt), `demo_driver.gd` (the self-driving car), `shot_director.gd` and `cine_camera.gd` (the camera shots). |
-| `lighting/` | The lighting modes (`lighting.gd`) and the car glint shader. |
+| `game/` | The game: car physics and nitro (`car.gd`), presets and save file (`car_tuning.gd`), tuning panel, track generator (`track.gd`), cameras, lap timer, rumble, the nitro bar (`nitro_hud.gd`), the pause menu (`pause_menu.gd`), the start lights (`race_start.gd`), the AI opponent (`opponent.gd`: the red car, its recovery and the race standing; `opponent_driver.gd`: its driving per level; `shaders/opponent_paint.gdshader`: its red paint), sound (`audio/`: the sample table, mixer, music looping and the car's engine, tyre and impact sounds), and the scripted drive test. The demo reel lives here too: `attract.gd` (reel state), `logo.gd` (logo, title and prompt), `demo_driver.gd` (the self-driving car), `shot_director.gd` and `cine_camera.gd` (the camera shots). |
+| `lighting/` | The lighting modes (`lighting.gd`), the car glint shader, the sunset and night skies (`sunset_sky.gdshader`, `night_sky.gdshader`) and the cars' night lights (`car_lights.gd`). |
 | `demo/` | The renderer demo scene and its screenshot-capture mode. |
 | `assets/` | Car and prop models, fonts, and `audio/` (music, sound effects, the sample table `sounds.cfg` and `CREDITS.md`). |
 | `docs/` | Images used in this README and the release notes for each version. |
@@ -195,11 +219,11 @@ Everything that defines the logo is at the top of `game/logo.gd`: the letter bit
 
 ### Editing the handling
 
-Every tunable is an exported property on `Car` (`game/car.gd`), grouped by Chassis, Suspension, Engine and brakes, Steering, Tyres, Drift, Nitro, Air and Visual. Presets are dictionaries of overrides in `game/car_tuning.gd`. Values saved from the tuning panel go to `car_tuning.cfg` in Godot's user data folder for the project. A `custom` preset saved before 0.3 keeps the older, slower and grippier values it was saved with.
+Every tunable is an exported property on `Car` (`game/car.gd`), grouped by Chassis, Suspension, Engine and brakes, Steering, Tyres, Drift, Nitro, Air and Visual. Presets are dictionaries of overrides in `game/car_tuning.gd`. Values saved from the tuning panel go to `car_tuning.cfg` in Godot's user data folder for the project. A `custom` preset saved before 0.3 keeps the older, slower values it was saved with, and one saved in 0.3 keeps 0.3's lower top speed and road grip.
 
 ### Editing the sound
 
-`assets/audio/sounds.cfg` maps each role (engine loops with their rpm, tyre squeal and skid, landing, kerb, impacts, nitro, menu and race music) to a file and a gain, so swapping a sound is a one-line change. The effect files are produced from their source recordings by `tools/prepare_audio.py`, which records the exact ranges used; the sources and licences are listed in `assets/audio/CREDITS.md`. The engine's gearbox exists only in the sound: it makes the revs rise and drop through five gears and does not affect the physics.
+`assets/audio/sounds.cfg` maps each role (engine loops with their rpm, tyre squeal and skid, landing, kerb, impacts, nitro, the start-light beeps, menu and race music) to a file and a gain, so swapping a sound is a one-line change. The effect files are produced from their source recordings by `tools/prepare_audio.py`, which records the exact ranges used (the two start beeps are synthesised tones: `tools/prepare_audio.py --beeps` rewrites just those); the sources and licences are listed in `assets/audio/CREDITS.md`. The engine's gearbox exists only in the sound: it makes the revs rise and drop through five gears and does not affect the physics.
 
 ## Testing
 
@@ -214,9 +238,15 @@ godot --path . --fixed-fps 120 -- --drivetest=/tmp/drive --preset=heavy --dtonly
 
 It writes `results.txt` and PNGs to the given folder and quits. It covers top speed, braking, each corner's clean speed, behaviour past the limit, the drift, the nitro, the jump, the bridge, kerbs, collisions, reset, pausing, gamepad bindings, the lighting modes, autopilot laps and the demo reel's driver (`--dtonly=demo_laps`).
 
+The opponent has its own scenarios: `opp_laps` (each level alone over a run of laps: lap times, resets, stuck time; `--opplevels=1,5` and `--opplaps=10` narrow it), `opp_block` (your car parked on the racing line and across the hairpin exit), `opp_shove` (a scripted hit), `opp_start` (both cars off the grid together), `opp_menu` (off / on / level changes from the menu, saved setting) and `opp_shots` (screenshots).
+
+Scripted runs (the drive test, `--attracttest`, `--attractshots`, the hero recording) skip the start lights. The `countdown` scenario turns them on: the cars do not move before lights out while the throttle is blipped, nitro cannot be used, the hold differs between starts, the lap timer starts at lights out, the opponent's reaction at levels 1 and 5 and its first corner, pausing and cancelling mid-sequence, no nodes or sound players left behind, and screenshots (two, three and five lamps and just after lights out, in iso and chase, on the Retina grid and at night).
+
+Three more scenarios cover the night lighting, the zoom and the HUD: `night` (screenshots at night where visibility matters, iso and chase: the grid, flat out on the straight, braking for the hairpin, the R6 after the jump, under the bridge, the opponent ahead and behind; `--nightmode=<n>` shoots another mode at the same places), `view_ahead` (road visible ahead of the car along its heading at 16:9, 16:10 and 21:9, standing and flat out, with the fixed 1.00 zoom and with AUTO, the car's size on screen, and how smoothly AUTO's zoom moves over a lap) and `hud_shots` (window captures of the minimised HUD's legend and the open HUD over the start lights).
+
 **Audio**: nobody can listen in a scripted run, so the mix is checked by recording it. `--dtonly=audio` under Godot's movie writer saves the game's audio for scripted scenarios, and `tools/measure_audio.py` reports loudness per layer, clipping and the engine's pitch over time.
 
-**Look regression**: renders the demo scene with fixed presets, so renderer changes can be compared image by image.
+**Look regression**: renders the demo scene with fixed presets, so renderer changes can be compared image by image. Files are named `<zoom>_<squeeze>_<n>_<mode>.png`; the classic mode (`*_3_classic.png`) is the byte-identity reference.
 
 ```sh
 godot --path . res://demo/demo.tscn -- --capture=/tmp/capture
@@ -234,28 +264,34 @@ godot --path . --fixed-fps 60 -- --attractshots=/tmp/attract-frames --attractsiz
 Install the Godot export templates matching your Godot version, then:
 
 ```sh
-tools/release.sh 0.4             # build and package all three platforms
+tools/release.sh 0.4             # build and package Windows, Linux, macOS and the web build
 tools/release.sh 0.4 --publish   # also tag v0.4, push, and create the GitHub release
 ```
 
-The script sets the version, exports Windows, Linux and macOS, smoke-tests the Linux build, and writes the archives and `SHA256SUMS.txt` to `build/release/<version>/`. With `--publish` it needs a clean working tree and an authenticated `gh`; release notes are taken from `docs/releases/<version>.md` if that file exists.
+The script sets the version, exports Windows, Linux, macOS and the web build, smoke-tests the Linux build, and writes the archives and `SHA256SUMS.txt` to `build/release/<version>/`. A missing or incomplete export of any target stops it. With `--publish` it needs a clean working tree and an authenticated `gh`; release notes are taken from `docs/releases/<version>.md` if that file exists.
 
-The presets are in `export_presets.cfg`. All three targets build from Linux. Windows and Linux embed the game data in the executable. To export a single target by hand:
+The presets are in `export_presets.cfg`. All four targets build from Linux. Windows and Linux embed the game data in the executable; the web build is a folder (`index.html`, `index.js`, `index.wasm`, `index.pck` and a few small files). To export a single target by hand:
 
 ```sh
 godot --headless --path . --export-release "Linux" build/linux/ascii-racer.x86_64
+godot --headless --path . --export-release "Web" build/web/index.html
 ```
+
+The web build runs on the Compatibility renderer (`rendering/renderer/rendering_method.web` in `project.godot`); the desktop builds stay on Forward+. To see what the browser will show without exporting, run the project with `--rendering-method gl_compatibility`.
 
 ## Limitations
 
-- **The handling and the sound were tuned by measurement.** The presets, the limit behaviour, the nitro and the audio mix were set up against scripted tests and recordings, with limited hands-on driving and listening so far.
+- **Most of the handling and the sound were tuned by measurement.** The `balanced` defaults were set by hand by the owner; the other presets, the limit behaviour, the nitro and the audio mix were set up against scripted tests and recordings, with limited hands-on driving and listening so far.
 - **Some sounds come from lossy previews.** The engine's idle and mid-rev loops, the landing thump and the kerb knock were cut from Freesound's public preview files, because the originals need a login. There is no recording above about 2,600 rpm, so the top of the rev range is that loop pitched up. `assets/audio/CREDITS.md` marks which files these are.
 - **The `heavy` preset bottoms out on the jump landing.**
+- **The opponent is a rival on the road, not yet a race.** There is a start, but no lap count, finish or results, and no jump-start penalty (the car is simply held until lights out): both cars lap freely after the lights. Its engine is quieter and fades with distance but is not panned left or right, and only its engine is heard (no tyre or nitro sounds of its own).
 - **The Retina default is new in 0.2.** On a Retina Mac the game now starts with larger glyphs and HUD text. If the characters still look too small or too large, adjust them with `-` and `=`.
 - **The Windows build has only been run under Wine**, not on a Windows PC.
-- **No web build.** Godot's web export only supports its Compatibility renderer, and the g-buffer stage relies on a Forward+ feature (reading scene normals in a shader). That stage would need porting.
-- **Glyph flicker.** As the camera moves, glyphs change. Grid snapping (`G`) reduces this for the static world in the isometric view but does not remove it, and it does not apply to the chase view.
-- **One track, one car, no opponents.**
+- **The web build is experimental.** It looks close to the desktop builds but not the same (see [Web build](#web-build)), its sound has not been listened to in a browser yet, and gamepads and rumble in the browser are untested.
+- **Glyph flicker.** As the camera moves, glyphs change. Grid snapping (`G`) reduces this for the static world in the isometric view but does not remove it, and it does not apply to the chase view. In the sunset mode it helps less when the isometric view is zoomed out (AUTO in a 16:9 window, or the menu's steps above 1.00): the grid-snap measurement goes from about 1% of cells changing at the base zoom to about 3% under AUTO at 16:9. The other modes are not affected.
+- **Night is experimental.** It is tuned so the road edges stay readable beyond the headlights, but the far side of a corner outside the beam is sparse, and an opponent's beam from behind washes out the player's car in the chase view.
+- **AUTO zoom moves the car off centre.** At speed in a 16:9 window the car sits well behind the centre of the screen and is drawn up to about a fifth smaller than at the base zoom; a fixed step in the menu keeps it centred at a constant size.
+- **One track and one car model** for the player (the AI opponent drives a second, red car), with one opponent at a time.
 
 ## Credits and licences
 

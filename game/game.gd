@@ -1,11 +1,11 @@
 ## Game controller: driving HUD with telemetry, lap timer, car reset, handling
 ## presets and the tuning panel, pad rumble, the iso / chase camera switch (Q,
-## pad B), lighting modes (keys 1-5, the sun on J L I K), the G (grid snap)
+## pad B), lighting modes (keys 1-7, the sun on J L I K), the G (grid snap)
 ## and V (rumble) keys, the see-through halo in the bridge,
 ## attract mode (the demo reel it opens on; Esc returns to it), and the
 ## `--drivetest=<dir>` scripted test mode.
 ##   --play                     start in the game, skipping the reel
-##   --lighting=<name|1-5>      start in this lighting mode
+##   --lighting=<name|1-7>      start in this lighting mode (default 1 sunset)
 ##   --preset=<name>            start with this handling preset
 ##   --tune=prop=value,...      then override single tunables (quick experiments)
 ##   --attractshots=<dir>       capture the reel (see Attract)
@@ -14,7 +14,7 @@ extends Node
 
 const DRIVE_KEYS: String = """Keys  WASD drive (arrows too while tuning is closed)  Space handbrake
       Shift nitro  R reset  Q camera  G grid snap  V rumble  F1 tuning  F2 F3 preset  F5 save
-      1-5 lighting  J L swing sun  I K raise / lower sun (lighting 2-5)
+      1-7 lighting  J L swing sun  I K raise / lower sun (moon at night; not in classic)
       Esc menu  M mute
 Pad   L-stick steer  RT throttle  LT brake  A handbrake  L-stick click nitro  Y reset  B camera
       R-stick look (chase)  Start menu  Back tuning  LB RB preset  R-stick click save"""
@@ -48,6 +48,11 @@ var nitro_hud: NitroHud
 var audio: AudioDirector
 var car_audio: CarAudio
 var pause_menu: PauseMenu
+## The AI opponent while it is on and a race is played (null otherwise).
+var opponent: Opponent
+## The start lights (every start from the grid). Scripted tests turn them off.
+var race_start: RaceStart
+var countdown_enabled: bool = true
 
 var _safe_pose: Transform3D
 var _safe_timer: float = 0.0
@@ -81,8 +86,11 @@ func _ready() -> void:
 	controls.keys_text = DRIVE_KEYS
 	add_child(controls)
 	controls.zoom_requested.connect(_on_zoom)
+	# The web build's g-buffer (Compatibility renderer) must cut the bridge's halo too.
+	renderer.gbuffer_twin_shaders[HaloOccluder.SHADER] = preload("res://game/shaders/halo_gbuffer.gdshader")
 	lighting = world.lighting
 	lighting.renderer = renderer
+	lighting.set_mode(lighting.mode) # again, now that it can reach the renderer (sky, hatching)
 	controls.mode_requested.connect(func(i: int) -> void:
 		lighting.set_mode(i)
 		flash("lighting %d %s" % [i + 1, lighting.mode_name()]))
@@ -128,6 +136,16 @@ func _ready() -> void:
 	pause_menu.renderer = renderer
 	pause_menu.audio = audio
 	add_child(pause_menu)
+	# The debug HUD's legend stays out of the menu (the game is paused under it,
+	# so _process below does not run until it closes).
+	pause_menu.opened.connect(func() -> void:
+		controls.legend_allowed = false
+		controls.legend.visible = false)
+
+	race_start = RaceStart.new()
+	race_start.name = "RaceStart"
+	race_start.game = self
+	add_child(race_start)
 
 	nitro_hud = NitroHud.new()
 	nitro_hud.game = self
@@ -158,6 +176,9 @@ func _ready() -> void:
 			test.out_dir = arg.trim_prefix("--drivetest=")
 			add_child(test)
 			scripted = true
+	if not scripted and OS.get_cmdline_user_args().has("--play"):
+		reset_to_grid() # the start lights
+		update_opponent(true)
 	if not scripted and not OS.get_cmdline_user_args().has("--play"):
 		attract = Attract.new()
 		attract.game = self
@@ -179,8 +200,39 @@ func reset_to_grid() -> void:
 	car.refill_nitro()
 	car_audio.reset()
 	laps.reset()
+	if opponent != null:
+		opponent.to_grid() # side by side
 	camera.snap_to_target()
 	chase.snap_to_target()
+	if countdown_enabled and (attract == null or not attract.active):
+		race_start.start()
+
+
+## Brings the opponent in line with the setting (AudioDirector.opponent_level):
+## removes it when off; adds it when on (both cars back on the grid when
+## `regrid`); a level change keeps both cars where they are.
+func update_opponent(regrid: bool) -> void:
+	var level := audio.opponent_level
+	if level <= 0:
+		remove_opponent()
+		return
+	if opponent == null:
+		opponent = Opponent.new()
+		opponent.name = "OpponentRace"
+		opponent.game = self
+		opponent.level = level
+		add_child(opponent)
+		if regrid:
+			reset_to_grid()
+	elif opponent.level != level:
+		opponent.set_level(level)
+
+
+func remove_opponent() -> void:
+	if opponent != null:
+		opponent.queue_free()
+		remove_child(opponent)
+		opponent = null
 
 
 ## , and . : iso zoom, or chase distance in the chase view.
@@ -253,7 +305,7 @@ func _physics_process(delta: float) -> void:
 		_safe_timer = 0.0
 		if car.wheels_on_road == 4 and car.is_upright() and track.is_on_road(car.global_position, laps.progress):
 			_safe_pose = track.pose_at(laps.progress, clampf(track.lateral_offset(car.global_position, laps.progress), -0.5, 0.5))
-	if car.player_input and Input.is_action_just_pressed(&"reset_car"):
+	if car.player_input and not race_start.counting and Input.is_action_just_pressed(&"reset_car"):
 		reset_car()
 
 
@@ -266,6 +318,10 @@ func reset_car() -> void:
 
 
 func _process(delta: float) -> void:
+	nitro_hud.race_text = opponent.status_text() if opponent != null and not race_start.counting else ""
+	camera.zoom_choice = audio.zoom_setting
+	# The debug HUD's legend: not over the reel (logo, prompt) or the menu.
+	controls.legend_allowed = (attract == null or not attract.busy()) and not pause_menu.is_open
 	# Music and mix: the menu track leads under the reel, the race track is a
 	# bed under the car in play (the pause menu sets its own context).
 	if attract != null and attract.busy():
@@ -273,7 +329,8 @@ func _process(delta: float) -> void:
 		audio.play_music("menu")
 	else:
 		audio.set_context(AudioDirector.Context.RACE)
-		audio.play_music("race")
+		# Under the start lights the music is held back; it comes in at lights out.
+		audio.play_music("" if race_start.counting else "race")
 	controls.mode_text = lighting.describe()
 	if controls.enabled:
 		lighting.update_sun_keys(delta)

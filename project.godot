@@ -177,8 +177,13 @@ common/physics_ticks_per_second=120
 common/max_physics_steps_per_frame=12
 3d/physics_engine="Jolt Physics"
 
+[audio]
+
+general/default_playback_type.web=0
+
 [rendering]
 
+renderer/rendering_method.web="gl_compatibility"
 textures/vram_compression/import_etc2_astc=true
 
 [shader_globals]

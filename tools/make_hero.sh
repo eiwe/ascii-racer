@@ -28,11 +28,16 @@ trap 'rm -rf "$WORK"' EXIT
 FRAMES=$(awk -v s="$SECONDS_LONG" -v f="$FPS" 'BEGIN { printf "%d", s * f }')
 
 echo "== Recording $SECONDS_LONG s ($FRAMES frames)"
-godot --path . --fixed-fps "$FPS" --write-movie "$WORK/f.png" --quit-after "$FRAMES" >"$WORK/log.txt" 2>&1 \
+# Silent: the hero has no sound, and the recording must not play through the speakers.
+# Quit through the game's own path (it stops all sound first); Godot's
+# --quit-after ends it mid-playback and prints leak errors.
+godot --audio-driver Dummy --path . --fixed-fps "$FPS" --write-movie "$WORK/f.png" -- --quitafter="$SECONDS_LONG" >"$WORK/log.txt" 2>&1 \
 	|| { tail -20 "$WORK/log.txt" >&2; echo "recording failed" >&2; exit 1; }
 if grep -E '^(ERROR|SCRIPT ERROR)' "$WORK/log.txt" >&2; then echo "recording printed errors" >&2; exit 1; fi
 COUNT=$(find "$WORK" -name 'f*.png' | wc -l)
 [ "$COUNT" -ge "$FRAMES" ] || { echo "expected $FRAMES frames, got $COUNT" >&2; exit 1; }
+# The game's quit lets a few more frames run while the sound stops: drop them.
+find "$WORK" -name 'f*.png' | sort | tail -n +"$((FRAMES + 1))" | xargs -r rm -f
 
 mkdir -p docs/images build/hero
 touch build/.gdignore

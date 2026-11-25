@@ -13,13 +13,15 @@ const CUSTOM: String = "custom"
 ## drive test (`--preset=<name>`); see the [summary] block it prints.
 const OVERRIDES: Dictionary = {
 	"balanced": {},
-	# Loose and playful: throttle and lift-off step the rear out (power_oversteer,
+	# Loose and playful: a rear with less grip than the front (balanced has
+	# the opposite), throttle and lift-off step it out (power_oversteer,
 	# engine_braking, a slightly higher CoM), slides keep most of their grip and
 	# the assist helps catch them. The handbrake drift holds the most angle and
 	# loses the least speed.
 	"drift": {
-		"power_oversteer": 0.4,
-		"engine_braking": 3.5,
+		"rear_grip": 0.97,
+		"power_oversteer": 0.3,
+		"engine_braking": 2.95,
 		"com_height": 0.07,
 		"launch_accel": 12.9,
 		"slide_grip": 0.9,
@@ -68,9 +70,10 @@ const OVERRIDES: Dictionary = {
 		"pitch_deg_per_g": 2.0,
 	},
 	# Weighty with momentum: more yaw and pitch inertia, slow steering, soft
-	# springs and a higher CoM (visible lean and dive), less grip and weaker
-	# brakes, slow to accelerate but coasts further: wide lines, lift early. The
-	# handbrake drift needs more speed, swings in slowly and carves wider.
+	# springs and a higher CoM (visible lean and dive), less grip (about 0.92 of
+	# balanced) and weaker brakes, slow to accelerate but a slightly higher top
+	# speed (about 1.05 of balanced) and coasts further: wide lines, lift early.
+	# The handbrake drift needs more speed, swings in slowly and carves wider.
 	"heavy": {
 		"inertia_per_mass": Vector3(0.09, 0.15, 0.035),
 		"com_height": 0.08,
@@ -79,11 +82,11 @@ const OVERRIDES: Dictionary = {
 		"stick_steer_speed": 10.0,
 		"max_steer_low_deg": 23.0,
 		"max_steer_high_deg": 6.0,
-		"top_speed": 11.4,
+		"top_speed": 13.7,
 		"launch_accel": 7.8,
 		"brake_decel": 8.2,
 		"rolling_decel": 0.5,
-		"grip_road": 0.92,
+		"grip_road": 1.2,
 		"slide_grip": 0.8,
 		"spring_hz": 2.6,
 		"damping_ratio": 0.45,

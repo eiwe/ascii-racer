@@ -20,6 +20,9 @@ var _log: PackedStringArray = []
 
 func _ready() -> void:
 	DirAccess.make_dir_recursive_absolute(out_dir)
+	# The start lights are checked by the drive test; --countdown keeps them on
+	# here to check the reel's way in and out with them.
+	game.countdown_enabled = OS.get_cmdline_user_args().has("--countdown")
 	_run.call_deferred()
 
 
@@ -67,10 +70,11 @@ func _state() -> String:
 	var car: Car = game.car
 	var grid: Transform3D = game.world.grid_pose()
 	var cam: Camera3D = game.renderer.scene_viewport.get_camera_3d()
-	return "attract %s, player_input %s, car %.2f from the grid at %.2f u/s, handbrake %s, camera %s, chase_view %s, HUD %s, panel open %s, overlay %s, lap started %s" % [
+	return "attract %s, player_input %s, car %.2f from the grid at %.2f u/s, handbrake %s, camera %s, chase_view %s, HUD %s, panel open %s, overlay %s, lap started %s, lights %s, held %s, beeping %s" % [
 		game.attract.active, car.player_input, car.global_position.distance_to(grid.origin), car.linear_velocity.length(),
 		car.handbrake_input, "iso" if cam == game.camera else cam.get_class(), game.chase_view, game.controls.hud.visible,
-		game.panel.is_open, game.renderer.overlay_enabled, game.laps.started]
+		game.panel.is_open, game.renderer.overlay_enabled, game.laps.started,
+		game.race_start.counting, car.freeze, game.race_start._beep.playing or game.race_start._go.playing]
 
 
 func _run() -> void:

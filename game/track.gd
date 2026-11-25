@@ -98,11 +98,11 @@ const ELEVATION: Array = [
 	{"from": -3.5, "to": 3.5, "rise": [1.6, 1.6], "shape": "flat", "deck": true},
 	{"from": 3.5, "to": 16.5, "rise": [1.6, 0.0], "shape": "ease"},
 	# Table-top jump on the main straight: kicker, table, landing. Sized for a
-	# top speed near 10: the landing slope is long enough that a flat-out car
-	# comes down on it, and ends before the braking zone of the corner.
-	{"from": 21.0, "to": 24.0, "rise": [0.0, 0.4], "shape": "kick"},
-	{"from": 24.0, "to": 26.0, "rise": [0.4, 0.4], "shape": "flat"},
-	{"from": 26.0, "to": 32.5, "rise": [0.4, 0.0], "shape": "ease"},
+	# top speed near 12: a low kicker so a flat-out car flies flat and comes
+	# down on the landing slope, which ends before the braking zone of the corner.
+	{"from": 21.0, "to": 24.0, "rise": [0.0, 0.3], "shape": "kick"},
+	{"from": 24.0, "to": 26.0, "rise": [0.3, 0.3], "shape": "flat"},
+	{"from": 26.0, "to": 33.5, "rise": [0.3, 0.0], "shape": "ease"},
 ]
 ## Distance along the centre line of the start line (on the main straight).
 const START_S: float = 19.5

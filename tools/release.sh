@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build ASCII Racer for Windows, Linux and macOS, and optionally publish a
-# GitHub release.
+# Build ASCII Racer for Windows, Linux, macOS and the web, and optionally
+# publish a GitHub release.
 #
 #   tools/release.sh <version>                 build and package only
 #   tools/release.sh <version> --publish       ... then commit the version bump,
@@ -68,8 +68,8 @@ sed -i -e "s|^application/short_version=.*|application/short_version=\"$VERSION\
 grep -n '^config/version=' project.godot
 
 # ---- build -------------------------------------------------------------------
-rm -rf build/windows build/linux build/macos "$OUT"
-mkdir -p build/windows build/linux build/macos "$OUT"
+rm -rf build/windows build/linux build/macos build/web "$OUT"
+mkdir -p build/windows build/linux build/macos build/web "$OUT"
 touch build/.gdignore
 
 export_target() { # <preset> <output>
@@ -86,6 +86,11 @@ export_target() { # <preset> <output>
 export_target "Windows Desktop" build/windows/ascii-racer.exe
 export_target "Linux" build/linux/ascii-racer.x86_64
 export_target "macOS" build/macos/ascii-racer-macos.zip
+export_target "Web" build/web/index.html
+# The web build is several files; all of them must be there, or nothing ships.
+for f in index.html index.js index.wasm index.pck; do
+	[ -s "build/web/$f" ] || { echo "web export incomplete: build/web/$f missing or empty" >&2; exit 1; }
+done
 chmod +x build/linux/ascii-racer.x86_64
 
 # The imported textures must not have been changed by the headless run (it once
@@ -112,9 +117,12 @@ step "Package"
 WIN="$OUT/ascii-racer-$VERSION-windows-x86_64.zip"
 LIN="$OUT/ascii-racer-$VERSION-linux-x86_64.tar.gz"
 MAC="$OUT/ascii-racer-$VERSION-macos-universal.zip"
+WEB="$OUT/ascii-racer-$VERSION-web.zip"
 (cd build/windows && zip -q -9 "$ROOT/$WIN" ascii-racer.exe)
 tar -C build/linux -czf "$LIN" ascii-racer.x86_64
 cp build/macos/ascii-racer-macos.zip "$MAC"
+(cd build/web && zip -q -9 -r "$ROOT/$WEB" .)
+for f in "$WIN" "$LIN" "$MAC" "$WEB"; do [ -s "$f" ] || { echo "package missing: $f" >&2; exit 1; }; done
 (cd "$OUT" && sha256sum ./*.zip ./*.tar.gz | sed 's| \./| |' > SHA256SUMS.txt)
 ls -la "$OUT" | awk 'NR>1 && $9 !~ /^\.+$/ {printf "%10d  %s\n", $5, $9}'
 
@@ -135,5 +143,5 @@ git tag -a "$TAG" -m "ASCII Racer $VERSION"
 git push -q origin HEAD
 git push -q origin "$TAG"
 if [ -n "$NOTES" ]; then NOTE_ARGS=(--notes-file "$NOTES"); else NOTE_ARGS=(--generate-notes); fi
-gh release create "$TAG" "$WIN" "$LIN" "$MAC" "$OUT/SHA256SUMS.txt" --title "ASCII Racer $VERSION" --verify-tag "${NOTE_ARGS[@]}"
+gh release create "$TAG" "$WIN" "$LIN" "$MAC" "$WEB" "$OUT/SHA256SUMS.txt" --title "ASCII Racer $VERSION" --verify-tag "${NOTE_ARGS[@]}"
 gh release view "$TAG" --json url --jq .url

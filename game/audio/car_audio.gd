@@ -42,14 +42,20 @@ const ENGINE_RPM_DB: float = 4.0
 const ENGINE_LP: Vector2 = Vector2(1200.0, 9000.0)
 ## Pitch-scale limits per loop (beyond them the loop is faded out).
 const PITCH_LIMIT: Vector2 = Vector2(0.55, 1.9)
-## Tyres: squeal starts at this tyre usage (1 = at the limit) and is full this
-## much past it; body slip adds to it.
-const SQUEAL_FROM: float = 0.97
-const SQUEAL_SPAN: float = 0.45
-const SLIP_FROM_DEG: float = 6.0
-const SLIP_SPAN_DEG: float = 22.0
-const TYRE_ATTACK: float = 0.03
-const TYRE_RELEASE: float = 0.12
+## Tyres: the squeal is an event, not a constant: it starts only well past the
+## grip limit (tyre usage, 1 = at the limit: 1.25 = slip angle 25 % past the
+## grip peak, or the friction circle overrun that much by wheelspin or a locked
+## brake) and is full this much further on; a body slip angle beyond
+## SLIP_FROM_DEG adds to it. A gate with hysteresis keeps it from chattering:
+## it opens above SQUEAL_ON and closes below SQUEAL_OFF.
+const SQUEAL_FROM: float = 1.25
+const SQUEAL_SPAN: float = 0.6
+const SLIP_FROM_DEG: float = 12.0
+const SLIP_SPAN_DEG: float = 20.0
+const SQUEAL_ON: float = 0.12
+const SQUEAL_OFF: float = 0.04
+const TYRE_ATTACK: float = 0.06
+const TYRE_RELEASE: float = 0.18
 ## Chassis.
 const LAND_MIN_AIR: float = 0.12 ## s in the air before a touchdown counts as a landing
 const LAND_FULL_VY: float = 4.0 ## u/s downward = full thump
@@ -61,6 +67,14 @@ var car: Car
 var table: SoundTable
 ## Told the squeal level each step (it ducks the race music); may be null.
 var director: AudioDirector
+## Secondary car (the opponent): engine only, on the Opponent bus, at
+## SECONDARY_DB and fading with its distance from `listener` (the player's car).
+## Contact sounds between the cars are the player's CarAudio's.
+var secondary: bool = false
+var listener: Node3D
+const SECONDARY_DB: float = -9.0
+## Distance (units) at which a secondary car is 6 dB quieter than up close.
+const SECONDARY_REF: float = 3.0
 ## False silences everything (fades out); the reel and the game both drive it.
 var active: bool = true
 
@@ -85,6 +99,7 @@ var _shots: Dictionary = {} ## role -> AudioStreamPlayer
 var _shift_t: float = 0.0
 var _was_air: float = 0.0
 var _since_landing: float = 1.0
+var _squeal_gate: bool = false
 var _prev_vy: float = 0.0
 var _prev_v: Vector3 = Vector3.ZERO
 var _prev_comp: float = 0.0
@@ -97,14 +112,16 @@ var _engine_bus: int = -1
 
 
 func _ready() -> void:
-	_engine_bus = AudioServer.get_bus_index("Engine")
+	_engine_bus = AudioServer.get_bus_index("Engine") if not secondary else -1
 	for l: Array in table.engine_loops():
-		var p := _loop_player(l[1], &"Engine")
+		var p := _loop_player(l[1], &"Opponent" if secondary else &"Engine")
 		_engine.append(p)
 		_engine_rpm.append(l[0])
 		_engine_gain.append(table.gain_db(l[1]))
 	engine_weights.resize(_engine.size())
 	engine_pitches.resize(_engine.size())
+	if secondary:
+		return
 	_squeal = _loop_player("tyre_squeal", &"Tyres")
 	_skid = _loop_player("tyre_skid", &"Tyres")
 	_nitro = _loop_player("nitro_sustain", &"Effects")
@@ -157,6 +174,9 @@ func _physics_process(delta: float) -> void:
 	_time += delta
 	_fade = move_toward(_fade, 1.0 if active else 0.0, delta / 0.25)
 	_update_engine(delta)
+	if secondary:
+		_apply()
+		return
 	_update_tyres(delta)
 	_update_chassis(delta)
 	_update_nitro()
@@ -231,6 +251,12 @@ func _update_tyres(delta: float) -> void:
 	if drifting:
 		want_skid = clampf(absf(car.drift_angle) / deg_to_rad(20.0), 0.3, 1.0) * clampf(speed / 3.0, 0.0, 1.0) * road
 		want_squeal *= 0.35
+	if want_squeal > SQUEAL_ON:
+		_squeal_gate = true
+	elif want_squeal < SQUEAL_OFF:
+		_squeal_gate = false
+	if not _squeal_gate:
+		want_squeal = 0.0
 	if car.wheels_grounded == 0 or _since_landing < 0.2:
 		want_squeal = 0.0 # in the air, and the jolt of a landing (the thump covers it)
 		want_skid = 0.0 if car.wheels_grounded == 0 else want_skid
@@ -266,7 +292,9 @@ func _update_chassis(delta: float) -> void:
 	# Impacts: what was hit since the last step, by the velocity change.
 	var dv := (v - _prev_v).length()
 	for body: Node in _pending_hits:
-		if body is RigidBody3D:
+		if body is Car:
+			_shot("impact_solid", clampf(dv / IMPACT_FULL_DV, 0.3, 1.0), randf_range(0.9, 1.0)) # the other car
+		elif body is RigidBody3D:
 			_shot("impact_cone", clampf(v.length() / 6.0, 0.3, 1.0), randf_range(0.9, 1.15))
 		else:
 			_shot("impact_solid", clampf(dv / IMPACT_FULL_DV, 0.25, 1.0), randf_range(0.95, 1.05))
@@ -296,6 +324,9 @@ func _apply() -> void:
 	var f := _fade
 	var rpm_frac := clampf((rpm - IDLE_RPM) / (REDLINE_RPM - IDLE_RPM), 0.0, 1.0)
 	var engine_db := lerpf(ENGINE_COAST_DB, ENGINE_LOAD_DB, load) + ENGINE_RPM_DB * rpm_frac
+	if secondary:
+		var d := car.global_position.distance_to(listener.global_position) if is_instance_valid(listener) else 0.0
+		engine_db += SECONDARY_DB - 20.0 * log(1.0 + d / SECONDARY_REF) / log(10.0) * 1.0
 	for i in _engine.size():
 		var p := _engine[i]
 		var pitch := engine_pitches[i]
@@ -307,6 +338,8 @@ func _apply() -> void:
 	if _engine_bus >= 0 and AudioServer.get_bus_effect_count(_engine_bus) > 0:
 		var lp := AudioServer.get_bus_effect(_engine_bus, 0) as AudioEffectLowPassFilter
 		lp.cutoff_hz = lerpf(ENGINE_LP.x, ENGINE_LP.y, clampf(0.65 * load + 0.35 * rpm_frac, 0.0, 1.0))
+	if secondary:
+		return
 	var speed := car.linear_velocity.length()
 	_set_loop(_squeal, squeal * f, 0.9 + 0.18 * squeal + 0.012 * speed, table.gain_db("tyre_squeal"))
 	_set_loop(_skid, skid * f, 0.85 + 0.025 * speed, table.gain_db("tyre_skid"))

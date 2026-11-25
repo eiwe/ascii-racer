@@ -19,6 +19,13 @@ script, same source ranges).
 | `music/menu.mp3` | Title / demo reel music ("Ascii racing menu") | Supplied by the project owner. Copied with the audio stream unchanged and all tags and cover art removed. |
 | `music/race.mp3` | Race music ("Pixel Velocity") | Supplied by the project owner. Copied the same way. |
 
+## Start lights
+
+| File | What | Source |
+|---|---|---|
+| `sfx/start_beep.ogg` | Beep as each start light comes on (880 Hz, 0.16 s) | Synthesised by `tools/prepare_audio.py --beeps` (a plain tone with a little harmonic content). No third-party material. |
+| `sfx/start_go.ogg` | Higher, longer beep at lights out (1320 Hz, 0.55 s) | Synthesised the same way. |
+
 ## Engine
 
 | File | What | Source, author, licence |

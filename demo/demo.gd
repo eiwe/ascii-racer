@@ -40,6 +40,7 @@ func _ready() -> void:
 	add_child(_controls)
 	_controls.zoom_requested.connect(func(step: int) -> void: world.zoom_index += step)
 	world.lighting.renderer = renderer
+	world.lighting.set_mode(world.lighting.mode) # again, now that it can reach the renderer
 	_controls.mode_requested.connect(func(i: int) -> void: world.lighting.set_mode(i))
 	world.lighting.changed.connect(func() -> void: _controls.mode_text = world.lighting.describe())
 	_controls.mode_text = world.lighting.describe()
@@ -68,7 +69,7 @@ func _run_selftest() -> void:
 		await get_tree().process_frame
 	# Live changes: atlas rebuild (glyph size), squeeze, lighting mode.
 	renderer.settings.glyph_px = 12
-	world.lighting.set_mode(2)
+	world.lighting.set_mode(4) # hatched
 	_controls.set_squeeze(0.8, 0.75)
 	await renderer.atlas_ready
 	for i in 30:
@@ -121,6 +122,13 @@ func _run_capture() -> void:
 				world.lighting.set_mode_frozen(m)
 				await _settle()
 				_save("%s_sq%03d_%d_%s.png" % [zname, roundi(sq * 100.0), m + 1, String(Lighting.MODES[m].name).replace(" ", "-")])
+				if OS.get_cmdline_user_args().has("--rawmodes") and sq == CAPTURE_SQUEEZES[0]:
+					# The 3D scene itself per mode (for comparing renderers).
+					renderer.raw_view = true
+					await _settle()
+					_save("%s_raw_%d_%s.png" % [zname, m + 1, String(Lighting.MODES[m].name).replace(" ", "-")])
+					renderer.raw_view = false
+					await _settle()
 			world.lighting.set_mode(0)
 			world.lighting.sweep_running = true
 	print("capture done: ", _capture_dir)

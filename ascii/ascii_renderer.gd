@@ -21,7 +21,10 @@ const RAMP_MAX: int = 32
 const SHAPE_MAX: int = 128
 
 const DEFAULT_FONT: Font = preload("res://assets/fonts/HackNerdFontMono-Bold.ttf")
-const GBUFFER_SHADER: Shader = preload("res://ascii/shaders/gbuffer.gdshader")
+## Loaded only under Forward+: it reads the normal buffer, which the
+## Compatibility renderer does not have (its shader would not compile there).
+const GBUFFER_SHADER_PATH: String = "res://ascii/shaders/gbuffer.gdshader"
+const GBUFFER_TWIN_SHADER: Shader = preload("res://ascii/shaders/gbuffer_twin.gdshader")
 const CELLS_SHADER: Shader = preload("res://ascii/shaders/cells.gdshader")
 const COMPOSE_SHADER: Shader = preload("res://ascii/shaders/compose.gdshader")
 
@@ -65,6 +68,25 @@ const HATCH_EDGE_MAX: int = 16
 ## Lighting-only render of the scene while shadow_hatch is on (else null).
 var light_viewport: SubViewport
 
+## Sky: background cells (where the scene has no geometry) are drawn from the
+## scene's colour like everything else instead of as empty cells, and the
+## distance fade is off (the scene fades into its sky itself). Off (the
+## default): output unchanged.
+var sky_enabled: bool = false:
+	set(v):
+		sky_enabled = v
+		if is_node_ready():
+			_cells_material.set_shader_parameter("sky_on", v)
+
+## With the sky on: sky cells get fill-ramp glyphs only (no shape matching), so
+## small points of light (stars) draw as one steady glyph rather than as letter
+## shapes that change as the camera turns. Off (the default): output unchanged.
+var sky_ramp_only: bool = false:
+	set(v):
+		sky_ramp_only = v
+		if is_node_ready():
+			_cells_material.set_shader_parameter("sky_ramp", v)
+
 ## Whether the overlay cell layer (get_overlay()) is drawn.
 var overlay_enabled: bool = false
 
@@ -100,6 +122,20 @@ var _light_camera: Camera3D
 var _light_twins: Array[MeshInstance3D] = []
 var _light_material: StandardMaterial3D
 
+## Under the Compatibility renderer (the web build; desktop runs Forward+) there
+## is no normal buffer for gbuffer.gdshader to read. There the g-buffer is drawn
+## from twins instead: every visible mesh gets a child on GBUFFER_LAYER with an
+## unshaded material that writes view normal and depth (gbuffer_twin.gdshader),
+## and the g-buffer camera sees only those. Nothing of this exists under Forward+.
+var compat: bool = RenderingServer.get_current_rendering_method() == "gl_compatibility"
+## Compatibility only: twin shaders for meshes whose own material is a
+## ShaderMaterial with one of these shaders (key) - for shaders that discard
+## fragments, so the twin cuts the same holes (e.g. the halo occluder).
+var gbuffer_twin_shaders: Dictionary = {}
+var _gbuffer_twin_material: ShaderMaterial
+var _gbuffer_twin_materials: Dictionary = {} ## Shader -> ShaderMaterial
+var _gbuffer_twins: Dictionary = {} ## original MeshInstance3D -> its twin
+
 
 func _ready() -> void:
 	process_priority = 1000 # mirror the camera after game code has moved it
@@ -109,6 +145,8 @@ func _ready() -> void:
 	for c in get_children():
 		remove_child(c)
 		scene_viewport.add_child(c)
+	if compat:
+		_sync_twins.call_deferred()
 	settings.changed.connect(_on_settings_changed)
 	get_viewport().size_changed.connect(_relayout)
 	_rebuild_atlas()
@@ -185,6 +223,46 @@ func _set_light_twins(on: bool) -> void:
 		_light_twins.append(t)
 
 
+# --- Compatibility g-buffer twins --------------------------------------------------
+
+func _on_node_added(n: Node) -> void:
+	if n is MeshInstance3D and scene_viewport.is_ancestor_of(n):
+		_sync_twins.call_deferred()
+
+
+## Gives every visible mesh in the scene its g-buffer twin and drops twins
+## whose original is gone (Compatibility only).
+func _sync_twins() -> void:
+	for k: Variant in _gbuffer_twins.keys():
+		if not is_instance_valid(k):
+			_gbuffer_twins.erase(k)
+	for mi: MeshInstance3D in scene_viewport.find_children("*", "MeshInstance3D", true, false):
+		if _gbuffer_twins.has(mi) or mi.layers & (GBUFFER_LAYER | LIGHT_LAYER) \
+				or mi.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY:
+			continue
+		var t := MeshInstance3D.new()
+		t.name = "GBufferTwin"
+		t.mesh = mi.mesh
+		t.material_override = _twin_material_for(mi)
+		t.layers = GBUFFER_LAYER
+		t.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		t.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		mi.add_child(t, false, INTERNAL_MODE_BACK)
+		_gbuffer_twins[mi] = t
+
+
+func _twin_material_for(mi: MeshInstance3D) -> ShaderMaterial:
+	var sm := mi.material_override as ShaderMaterial
+	if sm != null and gbuffer_twin_shaders.has(sm.shader):
+		var sh: Shader = gbuffer_twin_shaders[sm.shader]
+		if not _gbuffer_twin_materials.has(sh):
+			var m := ShaderMaterial.new()
+			m.shader = sh
+			_gbuffer_twin_materials[sh] = m
+		return _gbuffer_twin_materials[sh]
+	return _gbuffer_twin_material
+
+
 func is_atlas_ready() -> bool:
 	return atlas.ready_to_use
 
@@ -258,10 +336,12 @@ func _build_pipeline() -> void:
 	_gbuffer_camera = Camera3D.new()
 	# Its transform is copied every frame; interpolating it would lag the scene camera.
 	_gbuffer_camera.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
-	_gbuffer_camera.cull_mask = 0xFFFFF & ~LIGHT_LAYER
+	_gbuffer_camera.cull_mask = GBUFFER_LAYER if compat else 0xFFFFF & ~LIGHT_LAYER
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color.BLACK
+	# Compatibility: the twins write the g-buffer and the clear colour is the
+	# background (depth exactly 1.0); Forward+: the quad writes every pixel.
+	env.background_color = Color(0.5, 0.5, 1.0) if compat else Color.BLACK
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_DISABLED
 	env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
 	env.tonemap_mode = Environment.TONE_MAPPER_LINEAR
@@ -272,7 +352,8 @@ func _build_pipeline() -> void:
 	_gbuffer_camera.current = true
 
 	_gbuffer_material = ShaderMaterial.new()
-	_gbuffer_material.shader = GBUFFER_SHADER
+	if not compat:
+		_gbuffer_material.shader = load(GBUFFER_SHADER_PATH)
 	var quad_mesh := QuadMesh.new()
 	quad_mesh.size = Vector2(2.0, 2.0)
 	var quad := MeshInstance3D.new()
@@ -283,7 +364,13 @@ func _build_pipeline() -> void:
 	quad.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 	quad.extra_cull_margin = 16384.0
 	quad.position = Vector3(0.0, 0.0, -1.0)
-	_gbuffer_camera.add_child(quad)
+	if compat:
+		quad.free()
+		_gbuffer_twin_material = ShaderMaterial.new()
+		_gbuffer_twin_material.shader = GBUFFER_TWIN_SHADER
+		get_tree().node_added.connect(_on_node_added)
+	else:
+		_gbuffer_camera.add_child(quad)
 
 	cell_viewport = SubViewport.new()
 	cell_viewport.name = "CellViewport"
@@ -482,8 +569,17 @@ func _process(_delta: float) -> void:
 
 	var ortho := cam.projection == Camera3D.PROJECTION_ORTHOGONAL
 	_gbuffer_material.set_shader_parameter("far_plane", cam.far)
+	if compat:
+		_gbuffer_twin_material.set_shader_parameter("far_plane", cam.far)
+		for m: ShaderMaterial in _gbuffer_twin_materials.values():
+			m.set_shader_parameter("far_plane", cam.far)
+		# Meshes swapped or hidden after their twin was made follow here.
+		for k: Variant in _gbuffer_twins:
+			var t: Variant = _gbuffer_twins[k]
+			if is_instance_valid(k) and is_instance_valid(t) and (t as MeshInstance3D).mesh != (k as MeshInstance3D).mesh:
+				(t as MeshInstance3D).mesh = (k as MeshInstance3D).mesh
 	_cells_material.set_shader_parameter("far_plane", cam.far)
-	var fade := Vector2.ZERO if ortho else distance_fade
+	var fade := Vector2.ZERO if ortho or sky_enabled else distance_fade
 	_cells_material.set_shader_parameter("fade_begin", fade.x)
 	_cells_material.set_shader_parameter("fade_end", fade.y)
 	var ov := overlay_enabled and _overlay != null and not raw_view

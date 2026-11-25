@@ -26,6 +26,12 @@ uniform float fade_end = 0.0;
 // Overlay cell layer (AsciiOverlay): (grid.x * 2) x grid.y texels; texel 2x =
 // ink RGB + glyph index + 1 (0 = none), texel 2x + 1 = background RGB + cover.
 uniform bool overlay_on = false;
+// Sky (off by default): background cells are drawn from the scene colour like
+// any other cell instead of being left empty.
+uniform bool sky_on = false;
+// Sky cells use the fill ramp only (no shape matching): small bright points
+// such as stars become one steady ramp glyph instead of letter shapes.
+uniform bool sky_ramp = false;
 uniform sampler2D overlay_tex : filter_nearest, repeat_disable;
 // Shadow hatching (off by default): light_tex is the scene rendered as
 // lighting only. Fully shadowed cells get hatch_glyph on every
@@ -177,6 +183,9 @@ void fragment() {
 		}
 	}
 	float centre_depth = gb(cc).w;
+	if (sky_on) {
+		inner_void = 0;
+	}
 
 	float keep = 1.0;
 	if (fade_end > 0.0) {
@@ -237,7 +246,7 @@ void fragment() {
 					best = gi;
 				}
 			}
-			if (mx - mn >= shape_flat_threshold) {
+			if (mx - mn >= shape_flat_threshold && !(sky_ramp && centre_depth < 0.0)) {
 				g0 = best;
 			}
 		}

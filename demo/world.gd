@@ -43,6 +43,7 @@ func _ready() -> void:
 	_build_props()
 	car = _spawn("vehicle-racer", Vector3.ZERO, 0.0)
 	lighting.car = car
+	car.add_to_group(Lighting.LIT_CARS)
 	for w in ["wheel-fl", "wheel-fr", "wheel-bl", "wheel-br"]:
 		var n := car.find_child(w, true, false) as Node3D
 		if n != null:
@@ -56,6 +57,7 @@ func _ready() -> void:
 	add_child(camera)
 	camera.current = true
 	_update_pose()
+	lighting.set_mode(Lighting.DEFAULT_MODE)
 
 
 func _process(delta: float) -> void:

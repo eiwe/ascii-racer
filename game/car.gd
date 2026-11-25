@@ -60,8 +60,8 @@ const NITRO_MIN_START: float = 0.15
 
 @export_group("Engine and brakes")
 ## Speed at which the drive force reaches zero. Rolling drag makes the real top
-## speed on the road a little lower (10.8 here gives about 9.9).
-@export_range(1.0, 20.0, 0.1) var top_speed: float = 10.8
+## speed on the road a little lower (13.0 here gives about 11.6).
+@export_range(1.0, 20.0, 0.1) var top_speed: float = 13.0
 ## Acceleration from standstill (falls off as (1 - (v / top_speed)^2)).
 @export_range(0.5, 30.0, 0.1) var launch_accel: float = 10.0
 @export_range(0.5, 10.0, 0.1) var reverse_speed: float = 3.0
@@ -72,7 +72,7 @@ const NITRO_MIN_START: float = 0.15
 @export_range(0.0, 1.0, 0.05) var brake_front_bias: float = 0.6
 ## Rear-wheel deceleration with the throttle released (and no brake): shifts
 ## weight forward on lift-off, so lifting mid-corner tucks the nose in. 0 = coast.
-@export_range(0.0, 10.0, 0.25) var engine_braking: float = 2.5
+@export_range(0.0, 10.0, 0.25) var engine_braking: float = 2.1
 ## Constant rolling drag while coasting.
 @export_range(0.0, 5.0, 0.05) var rolling_decel: float = 0.8
 ## Extra speed-proportional drag per wheel off the road (1/s). Sets off-road top speed.
@@ -107,11 +107,11 @@ const NITRO_MIN_START: float = 0.15
 
 @export_group("Tyres")
 ## Friction coefficient on the road.
-@export_range(0.1, 3.0, 0.05) var grip_road: float = 1.0
+@export_range(0.1, 3.0, 0.05) var grip_road: float = 1.3
 ## Friction coefficient off the road (on the ground).
 @export_range(0.1, 3.0, 0.05) var grip_ground: float = 0.58
-@export_range(0.1, 2.0, 0.05) var front_grip: float = 1.03
-@export_range(0.1, 2.0, 0.05) var rear_grip: float = 0.95
+@export_range(0.1, 2.0, 0.05) var front_grip: float = 1.05
+@export_range(0.1, 2.0, 0.05) var rear_grip: float = 1.1
 ## Longitudinal grip (drive, brakes) as a multiple of the lateral grip: the
 ## friction circle becomes an ellipse, so the car can brake and put power down
 ## harder than it can corner.
@@ -119,12 +119,12 @@ const NITRO_MIN_START: float = 0.15
 ## Slip angle at which lateral grip peaks.
 @export_range(1.0, 30.0, 0.5) var peak_slip_deg: float = 7.0
 ## Lateral grip left when sliding well past the peak (fraction of peak).
-@export_range(0.1, 1.0, 0.05) var slide_grip: float = 0.85
+@export_range(0.1, 1.0, 0.05) var slide_grip: float = 0.87
 ## Fraction of the rear tyres' lateral grip lost at full throttle, scaled by the
 ## pedal and by the drive force left at this speed (like launch_accel): power
 ## oversteer that throttle can hold and lifting gives back. 0 = only the friction
 ## circle (drive force sharing the grip).
-@export_range(0.0, 0.8, 0.05) var power_oversteer: float = 0.2
+@export_range(0.0, 0.8, 0.05) var power_oversteer: float = 0.15
 ## Rear grip multiplier while the handbrake is held: always in the classic
 ## handbrake (drift_mode off); with drift_mode only for a low-speed pivot
 ## (handbrake + steering below drift_min_speed).
@@ -249,6 +249,12 @@ var _steer_state: float = 0.0
 var _mounts: Array[Vector3] = [] ## wheel attach points (top of travel), body local
 var _rest: Array[Vector3] = [] ## wheel hub rest positions, body local
 var _wheel_nodes: Array[Node3D] = []
+## Set before the car enters the tree to drive with these wheel rest
+## positions (fl, fr, bl, br; body local) instead of the model's: a car with a
+## different body keeps the same physics. The model's wheels are then drawn at
+## their own positions, offset from the physics ones.
+var physics_wheel_rest: Array[Vector3] = []
+var _visual_offset: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO]
 var _wheel_spin: PackedFloat32Array = [0.0, 0.0, 0.0, 0.0]
 var _wheel_drop: PackedFloat32Array = [0.0, 0.0, 0.0, 0.0] ## hub distance below mount
 var _prev_velocity: Vector3 = Vector3.ZERO
@@ -258,6 +264,7 @@ var _ray := PhysicsRayQueryParameters3D.new()
 
 
 func _ready() -> void:
+	add_to_group(Lighting.LIT_CARS) # headlights in the night lighting mode
 	center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM
 	can_sleep = false
 	# Pull the wheels out of the body mesh so the visual lean does not tilt them.
@@ -271,6 +278,10 @@ func _ready() -> void:
 		w.position = rest
 		w.basis = Basis.IDENTITY
 		_wheel_nodes.append(w)
+		if physics_wheel_rest.size() == 4:
+			var i := _rest.size()
+			_visual_offset[i] = rest - physics_wheel_rest[i]
+			rest = physics_wheel_rest[i]
 		_rest.append(rest)
 	refresh_tuning()
 	_ray.collision_mask = Track.LAYER_SURFACE
@@ -659,7 +670,7 @@ func _update_visuals(delta: float) -> void:
 	for i in 4:
 		var w := _wheel_nodes[i]
 		var m := _mounts[i]
-		w.position = Vector3(m.x, m.y - _wheel_drop[i], m.z)
+		w.position = Vector3(m.x, m.y - _wheel_drop[i], m.z) + _visual_offset[i]
 		var wf := -global_basis.z
 		if i < 2:
 			wf = wf.rotated(global_basis.y, -steer_angle)

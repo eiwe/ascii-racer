@@ -50,6 +50,7 @@ func _ready() -> void:
 	game.panel.enabled = false
 	game.rumble.set_enabled(false)
 	game.tuning.save_path = out_dir.path_join("car_tuning.cfg")
+	game.countdown_enabled = false # the countdown scenario turns it on for itself
 	renderer.fixed_output_size = SHOT_SIZE
 	_build_pad()
 	_run.call_deferred()
@@ -157,7 +158,7 @@ func _run() -> void:
 		if arg.begins_with("--dtonly="):
 			only = arg.trim_prefix("--dtonly=")
 	for t: String in ["spawn", "accel_brake", "corners", "limit", "nitro", "nitro_shots", "turns", "handbrake", "drift", "feel", "offroad", "kerbs", "tree", "cones", "jump", "bridge", "reset_bridge", "keys",
-			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause"]:
+			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots"]:
 		if only == "" or t in only.split(","):
 			await call("_test_" + t)
 	log_line("\n[summary] preset %s" % game.tuning.current)
@@ -533,10 +534,10 @@ func _test_keys() -> void:
 	_key(KEY_G, true)
 	_key(KEY_G, false)
 	var m0: String = game.lighting.mode_name()
-	_key(KEY_2, true)
-	_key(KEY_2, false)
+	_key(KEY_4, true)
+	_key(KEY_4, false)
 	var m1: String = game.lighting.mode_name()
-	# Sun keys in lighting 2: L swings it round, I raises it (held 0.5 s each).
+	# Sun keys in lighting 4 (low sun): L swings it round, I raises it (held 0.5 s each).
 	var az0: float = game.lighting.sun_az
 	var el0: float = game.lighting.sun_el
 	_key(KEY_L, true)
@@ -546,15 +547,15 @@ func _test_keys() -> void:
 	await _frames(60)
 	_key(KEY_I, false)
 	await _frames(2)
-	log_line("  2 then L, I held 0.5 s: sun az %.1f -> %.1f, el %.1f -> %.1f; HUD \"%s\"" % [
+	log_line("  4 then L, I held 0.5 s: sun az %.1f -> %.1f, el %.1f -> %.1f; HUD \"%s\"" % [
 		az0, game.lighting.sun_az, el0, game.lighting.sun_el, game.controls.mode_text])
 	game.lighting.reset_sun()
-	_key(KEY_1, true)
-	_key(KEY_1, false)
+	_key(KEY_3, true)
+	_key(KEY_3, false)
 	_key(KEY_L, true)
 	await _frames(30)
 	_key(KEY_L, false)
-	log_line("  1 then L: classic sun unchanged %s" %
+	log_line("  3 then L: classic sun unchanged %s" %
 		game.lighting.sun.basis.is_equal_approx(Basis.looking_at(-Lighting.CLASSIC_FROM.normalized(), Vector3.UP)))
 	var z0 := camera.size
 	_key(KEY_COMMA, true)
@@ -562,7 +563,7 @@ func _test_keys() -> void:
 	var z1 := camera.size
 	_key(KEY_PERIOD, true)
 	_key(KEY_PERIOD, false)
-	log_line("  G: snap %s -> %s; 2: lighting %s -> %s (1 restores %s); ,: zoom %.1f -> %.1f (. restores %.1f)" % [
+	log_line("  G: snap %s -> %s; 4: lighting %s -> %s (3 restores %s); ,: zoom %.1f -> %.1f (. restores %.1f)" % [
 		snap0, camera.snap_to_grid, m0, m1, game.lighting.mode_name(), z0, z1, camera.size])
 	camera.snap_to_grid = snap0
 	# R: drive off the road onto the pad... then reset (the pad counts as road, so use the circuit).
@@ -1661,7 +1662,7 @@ func _stop_line(ap: Autopilot) -> void:
 
 ## The table-top jump at top speed, about 50% and 25%.
 func _test_jump() -> void:
-	log_line("\n[jump] table-top on the main straight (kicker s 21..24 to 0.4 high, table to 26, landing slope to 32.5)")
+	log_line("\n[jump] table-top on the main straight (kicker s 21..24 to 0.3 high, table to 26, landing slope to 33.5)")
 	for frac: float in [1.0, 0.5, 0.25]:
 		var v := car.top_speed * 0.91 * frac
 		await _place_on_track(16.0, 0.0, v)
@@ -1711,7 +1712,7 @@ func _test_jump() -> void:
 			continue
 		var air_t := (land - take_off) / 120.0 if land >= 0 else -1.0
 		var dist := Vector2(p1.x - p0.x, p1.z - p0.z).length()
-		log_line("  %3.0f%% (%.1f u/s, %.2f at take-off): air %.2f s over %.2f u, highest %.2f above the road below, tilt in the air max %.1f deg; lands at s %.1f (slope 26..32.5), suspension max %d%% after landing, tilt max %.1f deg vs the road, %d bounce(s); upright %s, speed %.2f" % [
+		log_line("  %3.0f%% (%.1f u/s, %.2f at take-off): air %.2f s over %.2f u, highest %.2f above the road below, tilt in the air max %.1f deg; lands at s %.1f (slope 26..33.5), suspension max %d%% after landing, tilt max %.1f deg vs the road, %d bounce(s); upright %s, speed %.2f" % [
 			frac * 100.0, v, v_take, air_t, dist, max_h, air_tilt, land_s, roundi(comp * 100.0), land_tilt, bounce, car.is_upright(), _speed()])
 		_m["jump_%d" % roundi(frac * 100.0)] = "air %.2f s, %.2f u, lands s %.1f, suspension %d%%, peak %.2f, landing tilt %.1f deg, bounces %d, upright %s" % [
 			air_t, dist, land_s, roundi(comp * 100.0), max_h, land_tilt, bounce, car.is_upright()]
@@ -2215,7 +2216,7 @@ func _test_lighting() -> void:
 			await _shot("50_%s_%d_%s.png" % [p[0], m + 1, String(Lighting.MODES[m].name).replace(" ", "-")])
 			if OS.get_cmdline_user_args().has("--dtraw"):
 				await _shot("50_%s_%d_%s_raw.png" % [p[0], m + 1, String(Lighting.MODES[m].name).replace(" ", "-")], true)
-			if m == 2 and renderer.light_viewport != null and p[0] == "iso_trees":
+			if m == 4 and renderer.light_viewport != null and p[0] == "iso_trees":
 				renderer.light_viewport.get_texture().get_image().save_png(out_dir.path_join("51_%s_light_pass.png" % p[0]))
 		game.set_chase_view(false)
 	cine.queue_free()
@@ -2225,10 +2226,10 @@ func _test_lighting() -> void:
 
 
 
-## Lighting 4 (glint) through the hairpin in the chase view, against lighting 2
+## Lighting 6 (glint) through the hairpin in the chase view, against lighting 4
 ## (same sun, no glint), for the highlight travelling over the car.
 func _test_glint() -> void:
-	log_line("\n[glint] chase view through the hairpin, lighting 2 vs 4")
+	log_line("\n[glint] chase view through the hairpin, lighting 4 vs 6")
 	var l: Lighting = game.lighting
 	var m0 := l.mode
 	game.set_chase_view(true)
@@ -2236,7 +2237,7 @@ func _test_glint() -> void:
 	for s in range(100, 150, 5):
 		await _place_on_track(float(s))
 		await _frames(30)
-		for m: int in [1, 3]:
+		for m: int in [3, 5]:
 			l.set_mode(m)
 			await _frames(3)
 			await _shot("52_glint_%02d_%d.png" % [i, m + 1])
@@ -2248,7 +2249,7 @@ func _test_glint() -> void:
 
 
 
-## Lighting 5 (sweep): the sun at six points of its one-minute turn, iso over
+## Lighting 7 (sweep): the sun at six points of its one-minute turn, iso over
 ## the start line and chase, plus a short live run to check it moves.
 func _test_sweep() -> void:
 	log_line("\n[sweep] the moving sun")
@@ -2258,10 +2259,10 @@ func _test_sweep() -> void:
 	await _frames(20)
 	camera.snap_to_target()
 	for t in range(0, 60, 10):
-		l.set_mode_frozen(4, float(t))
+		l.set_mode_frozen(6, float(t))
 		await _frames(3)
 		await _shot("53_sweep_iso_%02ds.png" % t)
-	l.set_mode_frozen(4, 0.0)
+	l.set_mode_frozen(6, 0.0)
 	l.sweep_running = true
 	var az0 := l.sun_az
 	await _frames(240)
@@ -2290,7 +2291,10 @@ func _test_light_stability() -> void:
 			tree_p = prop.position
 	camera.snap_to_grid = true
 	var moves: Array[Vector3] = [Vector3(1.37, 0.0, 0.83), Vector3(-2.11, 0.0, 0.57), Vector3(0.43, 0.0, -1.91)]
-	for m in Lighting.MODES.size():
+	# The first mode is measured again at the end (the first pass can include
+	# settling after the camera was set up).
+	for mi in Lighting.MODES.size() + 1:
+		var m := mi % Lighting.MODES.size()
 		l.set_mode_frozen(m)
 		var tot := [0, 0, 0, 0]
 		var tree_tot := [0, 0]
@@ -2323,7 +2327,7 @@ func _test_light_stability() -> void:
 				tot[i] += res[i]
 			tree_tot[0] += res[5]
 			tree_tot[1] += res[6]
-		_m["stability %s glyph diff" % l.mode_name()] = "%d / %d" % [tot[1], tot[0]]
+		_m["stability %s%s glyph diff" % [l.mode_name(), " (again)" if mi >= Lighting.MODES.size() else ""]] = "%d / %d" % [tot[1], tot[0]]
 		log_line("  %-8s over %d moves: %d cells compared, glyph differs in %d (%.3f%%), ink in %d, background in %d; tree box %d/%d glyphs" % [
 			l.mode_name(), moves.size(), tot[0], tot[1], 100.0 * tot[1] / maxf(tot[0], 1), tot[2], tot[3], tree_tot[0], tree_tot[1]])
 	l.sweep_running = true
@@ -2340,7 +2344,7 @@ func _test_light_fps() -> void:
 	log_line("\n[light fps] frame rate per lighting mode (vsync off; window %s)" % get_window().size)
 	var l: Lighting = game.lighting
 	var m0 := l.mode
-	var order: Array[int] = [0, 1, 2, 3, 4, 0, 1, 0]
+	var order: Array[int] = [2, 3, 4, 5, 6, 0, 1, 2, 3, 2]
 	for chase: bool in [false, true]:
 		game.set_chase_view(chase)
 		var line := []
@@ -2376,22 +2380,25 @@ func _test_light_roundtrip() -> void:
 	# Hold the car still: earlier tests can leave it creeping.
 	car.freeze = true
 	await _frames(10)
-	l.set_mode(0)
+	var classic := Lighting.CLASSIC_MODE
+	l.set_mode(classic)
 	await _settle()
 	var a := renderer.get_output_image()
 	var ar := renderer.scene_viewport.get_texture().get_image()
 	# Control: the same mode again after the same wait, no switching.
-	for m in [0, 0, 0, 0]:
+	for m in [classic, classic, classic, classic]:
 		l.set_mode(m)
 		await _settle()
 	var c := renderer.get_output_image()
 	log_line("  control (classic, no switch): ascii identical %s, raw identical %s" % [
 		a.get_data() == c.get_data(), ar.get_data() == renderer.scene_viewport.get_texture().get_image().get_data()])
-	for m in [1, 2, 3, 4]:
+	for m in Lighting.MODES.size():
+		if m == classic:
+			continue
 		l.set_mode(m)
 		l.set_sun(l.sun_az + 33.0, l.sun_el + 5.0)
 		await _settle()
-	l.set_mode(0)
+	l.set_mode(classic)
 	await _settle()
 	var b := renderer.get_output_image()
 	var br := renderer.scene_viewport.get_texture().get_image()
@@ -2400,19 +2407,19 @@ func _test_light_roundtrip() -> void:
 	log_line("  classic before == after: ascii %s, raw scene %s" % [same, same_raw])
 	_m["classic roundtrip identical"] = same and same_raw
 	l.reset_sun()
-	l.set_mode(0)
+	l.set_mode(Lighting.DEFAULT_MODE)
 	car.freeze = false
 
 
 
 ## Glint visibility over a full autopilot lap, iso and chase: the same lap is
-## driven in lighting 4 with its highlight off (Lighting.glint_highlight) and
+## driven in lighting 6 with its highlight off (Lighting.glint_highlight) and
 ## on, and every 6th frame the car's screen box is cropped from the ASCII output
 ## and the raw scene (54_<view>_<off|on>_<n>_{ascii,raw}.png, boxes in
 ## 54_boxes.txt), for comparison offline: the difference is the highlight.
 ## The car poses of the two laps are logged to check that the laps match.
 func _test_glint_lap() -> void:
-	log_line("\n[glint lap] one autopilot lap per view in lighting 2 and 4, car crops every 6th frame")
+	log_line("\n[glint lap] one autopilot lap per view in lighting 6 with the highlight off and on, car crops every 6th frame")
 	var l: Lighting = game.lighting
 	var m0 := l.mode
 	var boxes := FileAccess.open(out_dir.path_join("54_boxes.txt"), FileAccess.WRITE)
@@ -2420,7 +2427,7 @@ func _test_glint_lap() -> void:
 		var view := "chase" if chase else "iso"
 		var poses := {}
 		for hl: bool in [false, true]:
-			var m := 3
+			var m := 5 # glint
 			var tag := "on" if hl else "off"
 			l.glint_highlight = hl
 			l.set_mode_frozen(m)
@@ -2448,7 +2455,7 @@ func _test_glint_lap() -> void:
 					poses[n] = car.global_position
 					boxes.store_line("%s %d %d %d %d %d %d" % [view, n, box.position.x, box.position.y, box.size.x, box.size.y, renderer.pitch.x * 1000 + renderer.pitch.y])
 				elif poses.has(n) and n % 50 == 0:
-					log_line("  %s sample %d: car pose differs from the lighting-2 lap by %.4f" % [view, n, car.global_position.distance_to(poses[n])])
+					log_line("  %s sample %d: car pose differs from the highlight-off lap by %.4f" % [view, n, car.global_position.distance_to(poses[n])])
 				n += 1
 			_stop_line(ap)
 			log_line("  %s highlight %s: %d samples over %.1f s" % [view, tag, n, frames / 120.0])
@@ -2495,6 +2502,7 @@ func _corner_list() -> Array:
 ## braking: it holds `v`). Returns [clean, max |lateral|, max slip deg, wheels
 ## off the road (frames), spun].
 var _runup_max: float = INF
+var _trace: PackedStringArray = []
 ## Measured clean speed per corner name (by _test_corners).
 var _corner_clean: Dictionary = {}
 ## Limit scenarios: entry this much faster than the corner's clean speed.
@@ -2798,8 +2806,9 @@ func _test_nitro() -> void:
 		_m["nitro_corner_" + ("on" if burn else "off")] = "peak slip %.0f deg, lateral %.2f" % [rad_to_deg(peak_slip), max_lat]
 
 	# In the air: the jump at top speed, nitro from the kicker, vs without.
+	var v_jump := car.top_speed * 0.91
 	for burn in [false, true]:
-		await _place_on_track(16.0, 0.0, 9.5)
+		await _place_on_track(16.0, 0.0, v_jump)
 		car.refill_nitro()
 		var take_off := Vector3.ZERO
 		var land := Vector3.ZERO
@@ -2826,8 +2835,8 @@ func _test_nitro() -> void:
 		car.nitro_input = false
 		var dist := Vector2(take_off.x, take_off.z).distance_to(Vector2(land.x, land.z))
 		var land_s := track.progress(land, 28.0)
-		log_line("  jump at 9.5 u/s, nitro %s: flight %.2f u, lands at s %.1f (landing slope s 26..32.5), yaw in the air %.1f deg, max compression after landing %d%%" % [
-			"ON" if burn else "off", dist, land_s, rad_to_deg(yaw_air), roundi(max_comp * 100.0)])
+		log_line("  jump at %.1f u/s, nitro %s: flight %.2f u, lands at s %.1f (landing slope s 26..33.5), yaw in the air %.1f deg, max compression after landing %d%%" % [
+			v_jump, "ON" if burn else "off", dist, land_s, rad_to_deg(yaw_air), roundi(max_comp * 100.0)])
 		_m["nitro_jump_" + ("on" if burn else "off")] = "flight %.2f u, lands s %.1f, compression %d%%" % [dist, land_s, roundi(max_comp * 100.0)]
 	_inputs(0.0, 0.0, 1.0, false)
 	await _frames(60)
@@ -3139,3 +3148,722 @@ func _test_pause() -> void:
 	await _shot("82_reel_menu_default.png")
 	menu.close()
 	await _frames(2)
+
+
+
+# --- AI opponent ---------------------------------------------------------------
+
+## Turns the opponent on at `level` (without saving the setting): both cars on the grid.
+func _opp_on(level: int) -> Opponent:
+	game.remove_opponent()
+	game.audio.opponent_level = level
+	game.update_opponent(true)
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--opptune="):
+			for kv in arg.trim_prefix("--opptune=").split(",", false):
+				var p := kv.split("=")
+				game.opponent.driver.set(p[0], float(p[1]))
+			game.opponent.driver.restart()
+	return game.opponent
+
+
+func _opp_off() -> void:
+	game.audio.opponent_level = 0
+	game.remove_opponent()
+
+
+## Parks the player's car on the test pad, frozen (out of the opponent's way).
+func _park_player() -> void:
+	car.teleport(Transform3D(Basis.IDENTITY, Vector3(-9.0, Track.ROAD_Y, -36.0)))
+	car.freeze = true
+
+
+func _levels() -> Array[int]:
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--opplevels="):
+			var out: Array[int] = []
+			for v in arg.trim_prefix("--opplevels=").split(","):
+				out.append(v.to_int())
+			return out
+	return [1, 2, 3, 4, 5]
+
+
+func _opp_laps_wanted() -> int:
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--opplaps="):
+			return arg.trim_prefix("--opplaps=").to_int()
+	return 6
+
+
+## Each level alone over a run of laps: lap times (from the start line), resets,
+## longest time without progress, off-road time, nitro and drift use.
+func _test_opp_laps() -> void:
+	var want := _opp_laps_wanted()
+	log_line("\n[opponent laps] each level alone, %d laps (the first from a standing start), the player's car parked off the track" % want)
+	for level in _levels():
+		var opp := _opp_on(level)
+		_park_player()
+		await _frames(30)
+		var oc: Car = opp.car
+		var drv: OpponentDriver = opp.driver
+		var first_cross: float = world.GRID_BACK
+		var times: Array[float] = []
+		var t := 0.0
+		var last_cross := 0.0
+		var next := first_cross
+		var stall := 0.0
+		var worst_stall := 0.0
+		var last_d := 0.0
+		var off := 0
+		var nitro_frames := 0
+		var drift_frames := 0
+		var max_slip := 0.0
+		while times.size() < want and t < 60.0 * want:
+			await _frames(1)
+			t += 1.0 / 120.0
+			var d: float = opp._d.y
+			if d >= next:
+				if next > first_cross:
+					times.append(t - last_cross)
+				last_cross = t
+				next += track.length
+			if d > last_d + 0.05:
+				last_d = d
+				stall = 0.0
+			else:
+				stall += 1.0 / 120.0
+				worst_stall = maxf(worst_stall, stall)
+			if oc.wheels_grounded > oc.wheels_on_road:
+				off += 1
+			if oc.nitro_level > 0.0:
+				nitro_frames += 1
+			if oc.drift_state == Car.Drift.DRIFT:
+				drift_frames += 1
+			max_slip = maxf(max_slip, absf(oc.slip_angle))
+		var flying := times.slice(1) if times.size() > 1 else times
+		var mean := 0.0
+		for x in flying:
+			mean += x
+		mean /= maxf(flying.size(), 1)
+		var spread := 0.0
+		for x in flying:
+			spread = maxf(spread, absf(x - mean))
+		log_line("  level %d: laps %s; flying laps mean %.2f s (+-%.2f); resets %d; longest without progress %.1f s; %.1f s with a wheel off the road; nitro %.1f s; drifting %.1f s; peak slip %.0f deg" % [
+			level, ", ".join(times.map(func(x: float) -> String: return "%.2f" % x)), mean, spread, opp.resets, worst_stall,
+			off / 120.0, nitro_frames / 120.0, drift_frames / 120.0, rad_to_deg(max_slip)])
+		_m["opp level %d" % level] = "mean %.2f s (+-%.2f) over %d flying laps, resets %d, off %.1f s" % [mean, spread, flying.size(), opp.resets, off / 120.0]
+		car.freeze = false
+		_opp_off()
+		await _frames(5)
+
+
+## The player's car parked in the way: on the racing line on the main straight,
+## and across the hairpin exit. The opponent comes from behind at speed.
+func _test_opp_block() -> void:
+	log_line("\n[opponent blocked] the player's car parked in the way; does the opponent get past (or recover) and carry on?")
+	for c: Array in [["on the line, main straight", 16.0, 0.0, 0.0], ["across the hairpin exit", 129.0, -0.2, 90.0]]:
+		for level: int in [2, 5]:
+			var opp := _opp_on(level)
+			var s: float = c[1]
+			var pose := track.pose_at(s, c[2])
+			pose.basis = pose.basis.rotated(Vector3.UP, deg_to_rad(c[3]))
+			car.teleport(pose)
+			var start_s := s - 22.0
+			opp.car.teleport(track.pose_at(start_s))
+			opp.car.linear_velocity = -track.pose_at(start_s).basis.z * 6.0
+			opp.driver.restart()
+			opp.to_grid_tracking_only()
+			var t := 0.0
+			var passed := -1.0
+			var hits := 0
+			var touching := false
+			var resets0 := opp.resets
+			var hint := start_s
+			while t < 20.0:
+				await _frames(1)
+				t += 1.0 / 120.0
+				hint = track.progress(opp.car.global_position, hint)
+				var ahead := wrapf(hint - s, -track.length * 0.5, track.length * 0.5)
+				if passed < 0.0 and ahead > 4.0:
+					passed = t
+				var now_touch := car.get_colliding_bodies().has(opp.car)
+				if now_touch and not touching:
+					hits += 1
+				touching = now_touch
+				if passed >= 0.0 and t > passed + 3.0:
+					break
+			log_line("  %s, level %d: %s; contacts %d; resets %d; player's car moved %.2f" % [c[0], level,
+				("past after %.1f s" % passed) if passed >= 0.0 else "NOT PAST in 20 s", hits, opp.resets - resets0, car.global_position.distance_to(pose.origin)])
+			_m["opp block %s L%d" % [c[0].get_slice(",", 0), level]] = ("past %.1f s" % passed) if passed >= 0.0 else "NOT PAST"
+			_opp_off()
+			await _frames(5)
+
+
+## A scripted hit: the opponent is shoved sideways off the road (and spun) at
+## speed; how long until it is back on the road making progress?
+func _test_opp_shove() -> void:
+	log_line("\n[opponent shoved] a sideways hit at speed on the main straight and in the S")
+	for c: Array in [["main straight", 14.0], ["the S", 64.0]]:
+		var opp := _opp_on(3)
+		_park_player()
+		var s0: float = c[1] - 10.0
+		opp.car.teleport(track.pose_at(s0))
+		opp.car.linear_velocity = -track.pose_at(s0).basis.z * 8.0
+		opp.driver.restart()
+		await _frames(120)
+		var oc: Car = opp.car
+		var side := oc.global_basis.x
+		oc.apply_central_impulse(side * oc.mass * 7.0)
+		oc.apply_torque_impulse(Vector3.UP * oc.mass * 0.25)
+		var t := 0.0
+		var max_lat := 0.0
+		var back := -1.0
+		var resets0 := opp.resets
+		var hint := track.progress(oc.global_position)
+		while t < 15.0:
+			await _frames(1)
+			t += 1.0 / 120.0
+			hint = track.progress(oc.global_position, hint)
+			var lat := absf(track.lateral_offset(oc.global_position, hint))
+			max_lat = maxf(max_lat, lat)
+			var along := oc.linear_velocity.dot(track.tangent_at(hint))
+			if back < 0.0 and max_lat > 1.0 and lat < 1.2 and along > 3.0 and absf(oc.slip_angle) < deg_to_rad(15.0):
+				back = t
+				break
+		log_line("  %s: knocked %.2f off the centre line; back on the road and going (> 3 u/s, slip < 15 deg) after %s; resets %d" % [
+			c[0], max_lat, ("%.1f s" % back) if back >= 0.0 else "NOT in 15 s", opp.resets - resets0])
+		_m["opp shove " + c[0]] = ("rejoined %.1f s" % back) if back >= 0.0 else "NOT REJOINED"
+		car.freeze = false
+		_opp_off()
+		await _frames(5)
+
+
+## Both cars off the grid together at full throttle (the player driven by the
+## plain autopilot) through the first corners.
+func _test_opp_start() -> void:
+	log_line("\n[opponent start] both cars from the grid, the player on the autopilot, 12 s")
+	for level: int in [3, 5]:
+		var opp := _opp_on(level)
+		await _frames(30)
+		var ap := Autopilot.new()
+		ap.car = car
+		ap.track = track
+		add_child(ap)
+		var hits := 0
+		var touching := false
+		var off := Vector2.ZERO
+		var slip := Vector2.ZERO
+		for i in 120 * 12:
+			await _frames(1)
+			var now_touch := car.get_colliding_bodies().has(opp.car)
+			if now_touch and not touching:
+				hits += 1
+			touching = now_touch
+			if car.wheels_grounded > car.wheels_on_road:
+				off.x += 1.0 / 120.0
+			if opp.car.wheels_grounded > opp.car.wheels_on_road:
+				off.y += 1.0 / 120.0
+			slip = Vector2(maxf(slip.x, absf(car.slip_angle)), maxf(slip.y, absf(opp.car.slip_angle)))
+		_stop_line(ap)
+		var st := opp.standing()
+		log_line("  level %d: contacts %d; off-road player %.1f s, opponent %.1f s; peak slip player %.0f, opponent %.0f deg; after 12 s %s; resets %d" % [
+			level, hits, off.x, off.y, rad_to_deg(slip.x), rad_to_deg(slip.y), opp.status_text(), opp.resets])
+		_m["opp start L%d" % level] = "contacts %d, %s, resets %d" % [hits, opp.status_text(), opp.resets]
+		_opp_off()
+		_inputs(0.0, 0.0, 1.0, false)
+		await _frames(30)
+
+
+## Off / on / level changes through the pause menu, repeatedly: the car and its
+## sound come and go cleanly, and the setting is saved and read back.
+func _test_opp_menu() -> void:
+	log_line("\n[opponent menu] off / on / level changes from the pause menu")
+	var au: AudioDirector = game.audio
+	au.settings_path = out_dir.path_join("audio_settings.cfg")
+	var menu: PauseMenu = game.pause_menu
+	_opp_off()
+	await _frames(10)
+	var base_nodes := get_tree().get_node_count()
+	var base_players := get_tree().root.find_children("*", "AudioStreamPlayer", true, false).size()
+	var row := PackedStringArray()
+	for level: int in [3, 5, 0, 2, 0, 4, 1, 0]:
+		menu.open(false)
+		await get_tree().process_frame
+		menu.selected = menu.items.find(PauseMenu.Item.OPPONENT)
+		var steps := level - au.opponent_level
+		for i in absi(steps):
+			_key(KEY_RIGHT if steps > 0 else KEY_LEFT, true)
+			_key(KEY_RIGHT if steps > 0 else KEY_LEFT, false)
+			await get_tree().process_frame
+		menu.close()
+		await _frames(30)
+		var on: bool = game.opponent != null
+		row.append("%s:%s%s" % ["off" if level == 0 else str(level), "on" if on else "off",
+			"" if (on == (level > 0)) and (not on or game.opponent.level == level) else " WRONG"])
+	await _frames(10)
+	var nodes := get_tree().get_node_count()
+	var players := get_tree().root.find_children("*", "AudioStreamPlayer", true, false).size()
+	var fresh := AudioDirector.new()
+	fresh.settings_path = au.settings_path
+	fresh.load_settings()
+	au.set_opponent_level(3)
+	au.save_settings()
+	var fresh2 := AudioDirector.new()
+	fresh2.settings_path = au.settings_path
+	fresh2.load_settings()
+	log_line("  sequence %s; after it (off): nodes %d (before %d), sound players %d (before %d); saved level read back %d, after setting 3: %d" % [
+		" ".join(row), nodes, base_nodes, players, base_players, fresh.opponent_level, fresh2.opponent_level])
+	_m["opp menu"] = "%s; nodes %d/%d, players %d/%d" % [" ".join(row), nodes, base_nodes, players, base_players]
+	fresh.free()
+	fresh2.free()
+	_opp_off()
+
+
+## Screenshots of the two cars: the grid (iso and chase), side by side in a
+## corner, the chase view behind the red car, in lighting mode 1.
+func _test_opp_shots() -> void:
+	log_line("\n[opponent shots]")
+	var opp := _opp_on(3)
+	await _frames(20)
+	await _shot("90_opp_grid_iso.png")
+	game.set_chase_view(true)
+	await _frames(5)
+	await _shot("91_opp_grid_chase.png")
+	game.set_chase_view(false)
+	# Side by side through the R6 corner.
+	var s0 := 30.0
+	car.teleport(track.pose_at(s0, -0.6))
+	opp.car.teleport(track.pose_at(s0, 0.6))
+	for c: Car in [car, opp.car]:
+		c.linear_velocity = -track.pose_at(s0).basis.z * 7.0
+	opp.driver.restart()
+	var ap := Autopilot.new()
+	ap.car = car
+	ap.track = track
+	ap.line_offset = -0.6
+	ap.max_speed = 7.5
+	add_child(ap)
+	await _frames(150)
+	camera.snap_to_target()
+	await _shot("92_opp_side_by_side_iso.png")
+	game.chase.target = opp.car
+	game.set_chase_view(true)
+	await _frames(60)
+	await _shot("93_opp_chase_behind_red.png")
+	await _shot("93_opp_chase_behind_red_raw.png", true)
+	game.chase.target = car
+	game.set_chase_view(false)
+	_stop_line(ap)
+	_opp_off()
+
+
+
+## The start lights: the cars are held until lights out (throttle blips rev
+## the engine, nothing moves, no lap time), the hold varies between starts, the
+## opponent reacts by level, both cars get through the first corner, pause and
+## cancel behave, nothing is left behind. Screenshots of the lamps.
+func _test_countdown() -> void:
+	log_line("\n[countdown] start lights")
+	game.countdown_enabled = true
+	var rs: RaceStart = game.race_start
+	_opp_off()
+	await _frames(10)
+	var base_nodes := get_tree().get_node_count()
+	var base_players := get_tree().root.find_children("*", "AudioStreamPlayer", true, false).size()
+	var holds := PackedStringArray()
+	for level: int in [0, 1, 5]:
+		var opp: Opponent = null
+		if level > 0:
+			opp = _opp_on(level)
+		else:
+			game.reset_to_grid()
+		var p0 := car.global_position
+		var o0 := opp.car.global_position if opp != null else Vector3.ZERO
+		var moved := 0.0
+		var max_rpm := 0.0
+		var lap_early := false
+		var nitro_used := false
+		var frames := 0
+		while rs.counting and frames < 120 * 10:
+			_inputs(0.6, 1.0 if (frames / 30) % 2 == 0 else 0.0, 0.0, false) # blips, steering
+			car.nitro_input = true
+			await get_tree().process_frame
+			frames += 1
+			if not rs.counting:
+				break # the lights went out during this frame
+			moved = maxf(moved, car.global_position.distance_to(p0))
+			if opp != null:
+				moved = maxf(moved, opp.car.global_position.distance_to(o0))
+			max_rpm = maxf(max_rpm, game.car_audio.rpm)
+			lap_early = lap_early or game.laps.started
+			nitro_used = nitro_used or car.nitro_level > 0.0
+		car.nitro_input = false
+		holds.append("%.2f" % rs.hold)
+		# After lights out: the opponent's reaction, then the first corner with the
+		# player on the autopilot.
+		var lap_at_go := "lap %d, %.2f s" % [game.laps.lap, game.laps.current]
+		var react := -1.0
+		var moving := -1.0
+		var t := 0.0
+		var ap := Autopilot.new()
+		ap.car = car
+		ap.track = track
+		add_child(ap)
+		var hits := 0
+		var touching := false
+		while t < 9.0:
+			await _frames(1)
+			t += 1.0 / 120.0
+			if opp != null and t < 1.0 and int(t * 120.0) % 6 == 0:
+				_trace.append("%.2f:thr%.2f cap%.1f bias%.2f v%.2f" % [t, opp.car.throttle_input, opp.driver.speed_cap, opp.driver.lateral_bias, opp.car.forward_speed])
+			if opp != null and react < 0.0 and opp.car.throttle_input > 0.5:
+				react = t
+			if opp != null and moving < 0.0 and opp.car.forward_speed > 0.3:
+				moving = t
+			if opp != null:
+				var now := car.get_colliding_bodies().has(opp.car)
+				if now and not touching:
+					hits += 1
+				touching = now
+		var lap_after := "lap %d, %.2f s, checkpoints %d" % [game.laps.lap, game.laps.current, game.laps.next_checkpoint]
+		_stop_line(ap)
+		if OS.get_cmdline_user_args().has("--cdtrace"):
+			log_line("    trace: " + " ".join(_trace))
+		_trace.clear()
+		log_line("  %s: held for %.2f s (hold after the fifth lamp %.2f s); moved before lights out %.4f; engine revved to %.0f rpm with the car held; nitro used before lights out %s; lap timer started early %s, at lights out %s, 9 s later %s; %s" % [
+			"solo" if level == 0 else "opponent level %d" % level, rs.t, rs.hold, moved, max_rpm, nitro_used, lap_early, lap_at_go, lap_after,
+			("opponent on the throttle after %.2f s (planned %.2f), moving (> 0.3 u/s) after %.2f s; first 9 s: contacts %d, %s, opponent resets %d" % [react, rs.opponent_delay, moving, hits, opp.status_text(), opp.resets]) if opp != null else "no opponent"])
+		_m["countdown " + ("solo" if level == 0 else "L%d" % level)] = "moved %.4f, rpm %.0f, early lap %s%s" % [moved, max_rpm, lap_early,
+			(", reaction %.2f s, contacts %d" % [react, hits]) if opp != null else ""]
+		_inputs(0.0, 0.0, 1.0, false)
+		await _frames(30)
+	log_line("  holds over the starts: %s s" % ", ".join(holds))
+
+	# Pause mid-countdown: the lights stop, and carry on after.
+	_opp_off()
+	game.reset_to_grid()
+	while rs.t < 2.2:
+		await get_tree().process_frame
+	var t_pause := rs.t
+	game.pause_menu.open(false)
+	for i in 60:
+		await get_tree().process_frame
+	var t_paused := rs.t
+	game.pause_menu.close()
+	for i in 30:
+		await get_tree().process_frame
+	log_line("  pause at %.2f s: after a second paused %.2f s (still counting %s); half a second after resuming %.2f s" % [t_pause, t_paused, rs.counting, rs.t])
+	_m["countdown pause"] = "%.2f -> %.2f paused -> %.2f" % [t_pause, t_paused, rs.t]
+	# Cancel mid-countdown (what returning to the reel does).
+	rs.cancel()
+	await _frames(10)
+	var beeping := rs._beep.playing or rs._go.playing
+	log_line("  cancel: counting %s, car held %s, nitro allowed %s, a beep still playing %s" % [rs.counting, car.freeze, car.nitro_enabled, beeping])
+	_m["countdown cancel"] = "counting %s, held %s, beeping %s" % [rs.counting, car.freeze, beeping]
+
+	# Screenshots: two lamps, five lamps, just after lights out; iso and chase.
+	var opp := _opp_on(3)
+	for chase: bool in [false, true]:
+		game.set_chase_view(chase)
+		game.reset_to_grid()
+		var view := "chase" if chase else "iso"
+		while rs._lit < 2:
+			await get_tree().process_frame
+		await _shot("95_lights_2_%s.png" % view)
+		while rs._lit < 5:
+			await get_tree().process_frame
+		await _shot("96_lights_5_%s.png" % view)
+		while rs.counting:
+			await get_tree().process_frame
+		await _shot("97_lights_out_%s.png" % view)
+	# Readability: the Retina 20 px grid and lighting mode 2 (night), three lamps.
+	var px0 := renderer.settings.glyph_px
+	var mode0: int = game.lighting.mode
+	for v: Array in [["retina_iso", 20, mode0, false], ["retina_chase", 20, mode0, true], ["night_iso", px0, 1, false], ["night_chase", px0, 1, true]]:
+		if renderer.settings.glyph_px != v[1]:
+			renderer.settings.glyph_px = v[1]
+			await renderer.atlas_ready
+		game.lighting.set_mode(v[2])
+		game.set_chase_view(v[3])
+		game.reset_to_grid()
+		while rs._lit < 3:
+			await get_tree().process_frame
+		await _shot("98_lights_3_%s.png" % v[0])
+	game.lighting.set_mode(mode0)
+	game.set_chase_view(false)
+	_opp_off()
+	game.countdown_enabled = false
+	rs.cancel()
+	await _frames(20)
+	var nodes := get_tree().get_node_count()
+	var players := get_tree().root.find_children("*", "AudioStreamPlayer", true, false).size()
+	log_line("  afterwards: nodes %d (before %d), sound players %d (before %d)" % [nodes, base_nodes, players, base_players])
+	_m["countdown leftovers"] = "nodes %d/%d, players %d/%d" % [nodes, base_nodes, players, base_players]
+
+
+
+# --- iso framing: road ahead per aspect ------------------------------------------
+
+## Window shapes (same height, so the same vertical extent at a given zoom).
+const VIEW_ASPECTS: Array = [["16x9", Vector2i(1600, 900)], ["16x10", Vector2i(1440, 900)], ["21x9", Vector2i(2100, 900)]]
+
+
+## World units visible ahead of the car along its heading (ground plane), and
+## behind it, in the iso camera; and the car's size on screen (pixels, the
+## projected box of its body).
+func _view_numbers() -> Dictionary:
+	var cam := renderer.scene_viewport.get_camera_3d()
+	var rect := Rect2(Vector2.ZERO, Vector2(renderer.scene_viewport.size))
+	var xf := car.get_global_transform_interpolated()
+	var p := xf.origin
+	var h := -xf.basis.z
+	h.y = 0.0
+	h = h.normalized()
+	var out := {}
+	for sgn: float in [1.0, -1.0]:
+		var lo := 0.0
+		var hi := 80.0
+		for i in 30:
+			var mid := (lo + hi) * 0.5
+			if rect.has_point(cam.unproject_position(p + h * mid * sgn)):
+				lo = mid
+			else:
+				hi = mid
+		out["ahead" if sgn > 0.0 else "behind"] = lo
+	var bb := Rect2(cam.unproject_position(p), Vector2.ZERO)
+	for c in 8:
+		var local := Vector3(0.25 * (1 if c & 1 else -1), 0.35 * float((c >> 1) & 1), 0.44 * (1 if c & 4 else -1))
+		bb = bb.expand(cam.unproject_position(xf * local))
+	# In cells: the output is scaled from the scene viewport to the output size.
+	var k := float(renderer.output_size.y) / rect.size.y
+	out["car_px"] = bb.size * k
+	out["car_cells"] = Vector2(bb.size.x * k / renderer.pitch.x, bb.size.y * k / renderer.pitch.y)
+	out["size"] = cam.size
+	return out
+
+
+func _test_view_ahead() -> void:
+	log_line("\n[view_ahead] iso camera: road visible ahead of the car along its heading (world units)")
+	game.set_chase_view(false)
+	var keep_choice: int = game.audio.zoom_setting
+	# Before = the fixed 1.00 step (exactly the old camera); after = AUTO.
+	for setting: Array in [["before", 2], ["after", 0]]:
+		game.audio.zoom_setting = setting[1]
+		camera.zoom_choice = setting[1]
+		for asp: Array in VIEW_ASPECTS:
+			renderer.fixed_output_size = asp[1]
+			await _frames(3)
+			var line := PackedStringArray()
+			# Standing: on the grid (the main straight, a 30 deg diagonal on screen)
+			# and on the bridge deck (heading straight across the screen).
+			var stand := {}
+			for st: Array in [["grid", -1.0], ["deck", 3.0]]:
+				if st[1] < 0.0:
+					game.reset_to_grid()
+				else:
+					_place_on_track(st[1])
+					await _frames(2)
+					camera.snap_to_target()
+				await _frames(240)
+				stand[st[0]] = _view_numbers()
+				if setting[0] == "after" or st[0] == "grid":
+					await _shot("view_%s_%s_%s_stand.png" % [setting[0], asp[0], st[0]])
+			var sv: Dictionary = stand.grid
+			line.append("standing: grid %.1f, deck %.1f ahead (size %.2f, car %.1f x %.1f cells)" % [sv.ahead, stand.deck.ahead, sv.size, sv.car_cells.x, sv.car_cells.y])
+			# Flat out: down the diagonal (straight up/down the screen) and over the
+			# deck (straight across).
+			for run: Array in [["diagonal", 60.0, 92.0, 97.0], ["deck", 131.0, 0.5, 5.0]]:
+				_place_on_track(run[1], 0.0, 9.0)
+				await _frames(2)
+				camera.snap_to_target()
+				var ap := _start_line(13.0)
+				var acc := {"ahead": 0.0, "n": 0, "speed": 0.0, "size": 0.0}
+				var shot_done := false
+				var seen := false
+				for i in 120 * 8:
+					await _frames(1)
+					var sp := fposmod(game.laps.progress, track.length)
+					if sp > run[2] and sp < run[3]:
+						seen = true
+						var v := _view_numbers()
+						acc.ahead += v.ahead
+						acc.size += v.size
+						acc.speed += car.forward_speed
+						acc.n += 1
+						if not shot_done and sp > (run[2] + run[3]) * 0.5:
+							shot_done = true
+							await _shot("view_%s_%s_%s_speed.png" % [setting[0], asp[0], run[0]])
+					elif seen:
+						break
+				_stop_line(ap)
+				var n: int = maxi(acc.n, 1)
+				line.append("%s at %.1f u/s: %.1f ahead (size %.2f)" % [run[0], acc.speed / n, acc.ahead / n, acc.size / n])
+				_m["view %s %s %s" % [setting[0], asp[0], run[0]]] = "%.1f ahead" % (acc.ahead / n)
+				_inputs(0.0, 0.0, 1.0, false)
+				await _frames(60)
+			log_line("  %s %s: %s" % [setting[0], asp[0], "; ".join(line)])
+			_m["view %s %s standing" % [setting[0], asp[0]]] = "grid %.1f, deck %.1f ahead, car %.1f x %.1f cells" % [sv.ahead, stand.deck.ahead, sv.car_cells.x, sv.car_cells.y]
+	# Zoom smoothness: one autopilot lap at 16:9 in AUTO; the ortho size every
+	# frame: range, fastest change, and how often the change reverses direction.
+	game.audio.zoom_setting = 0
+	camera.zoom_choice = 0
+	renderer.fixed_output_size = SHOT_SIZE
+	game.reset_to_grid()
+	await _frames(60)
+	var ap2 := Autopilot.new()
+	ap2.car = car
+	ap2.track = track
+	add_child(ap2)
+	var prev := camera.size
+	var prev_d := 0.0
+	var lo := INF
+	var hi := -INF
+	var max_rate := 0.0
+	var flips := 0
+	for i in 120 * 18:
+		await get_tree().process_frame
+		var d := camera.size - prev
+		prev = camera.size
+		lo = minf(lo, camera.size)
+		hi = maxf(hi, camera.size)
+		var dt := get_process_delta_time()
+		if dt > 0.0:
+			max_rate = maxf(max_rate, absf(d) / dt / camera.size)
+		if absf(d) > 1e-5:
+			if prev_d != 0.0 and signf(d) != signf(prev_d):
+				flips += 1
+			prev_d = d
+	_stop_line(ap2)
+	log_line("  AUTO over a lap at 16:9: ortho size %.2f..%.2f, fastest change %.1f%%/s, direction reversals %d" % [lo, hi, max_rate * 100.0, flips])
+	_m["view auto lap"] = "size %.2f..%.2f, max %.1f%%/s, reversals %d" % [lo, hi, max_rate * 100.0, flips]
+	game.audio.zoom_setting = keep_choice
+	camera.zoom_choice = keep_choice
+	renderer.fixed_output_size = SHOT_SIZE
+	await _frames(5)
+
+
+# --- night lighting ---------------------------------------------------------------
+
+## Night (lighting 2) where visibility matters, iso and chase: on the grid, mid
+## straight at speed, braking for the hairpin, the R6 after the jump, under the
+## bridge, the opponent ahead and behind. --nightmode=<n> shoots another mode
+## at the same places (for comparison).
+func _test_night() -> void:
+	log_line("\n[night] lighting 2 where visibility matters")
+	var l: Lighting = game.lighting
+	var m0 := l.mode
+	var mode := 1
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--nightmode="):
+			mode = arg.trim_prefix("--nightmode=").to_int() - 1
+	l.set_mode(mode)
+	var tag := String(Lighting.MODES[mode].name).replace(" ", "-")
+	# Where the diagonal passes under the bridge deck.
+	var under := 90.0
+	var best := INF
+	for i in 200:
+		var su := 80.0 + i * 0.1
+		var d := Vector2(track.point_at(su).x - track.point_at(0.0).x, track.point_at(su).z - track.point_at(0.0).z).length()
+		if d < best:
+			best = d
+			under = su
+	# [name, s, speed, opponent offset (0 = none)]
+	var poses: Array = [["grid", -1.0, 0.0, 0.0], ["straight", 10.0, 11.0, 0.0], ["hairpin_approach", 104.0, 10.0, 0.0],
+		["r6_after_jump", 30.5, 10.5, 0.0], ["under_bridge", under - 2.0, 9.0, 0.0],
+		["opp_ahead", 60.5, 9.0, 3.5], ["opp_behind", 60.5, 9.0, -3.0]]
+	for p: Array in poses:
+		for chase: bool in [false, true]:
+			var view := "chase" if chase else "iso"
+			var opp: Opponent = null
+			if p[3] != 0.0:
+				opp = _opp_on(3)
+			else:
+				_opp_off()
+			game.set_chase_view(chase)
+			if p[1] < 0.0:
+				game.reset_to_grid()
+				await _frames(30)
+			else:
+				_place_on_track(p[1], 0.0, p[2])
+				await _frames(2)
+				camera.snap_to_target()
+				game.chase.snap_to_target()
+				if opp != null:
+					var xf := track.pose_at(p[1] + p[3], 0.35)
+					opp.car.teleport(xf)
+					opp.car.linear_velocity = -xf.basis.z * p[2]
+					opp.to_grid_tracking_only()
+				var ap := _start_line(p[2])
+				await _frames(36)
+				if p[0] == "hairpin_approach":
+					ap.enabled = false
+					_inputs(0.0, 0.0, 1.0, false) # braking: brake lights
+					await _frames(12)
+					ap.queue_free()
+				else:
+					_stop_line(ap)
+			await _shot("90_%s_%s_%s.png" % [tag, p[0], view])
+			if OS.get_cmdline_user_args().has("--dtraw"):
+				await _shot("90_%s_%s_%s_raw.png" % [tag, p[0], view], true)
+	_opp_off()
+	game.set_chase_view(false)
+	l.set_mode(m0)
+	_inputs(0.0, 0.0, 1.0, false)
+	await _frames(30)
+	log_line("  shots 90_%s_<place>_<view>.png" % tag)
+
+
+
+## The minimised debug HUD (its legend) and the open HUD with the start lights,
+## as the window shows them (the HUD is not part of the renderer's output), at
+## 16:9 and 21:9 and the default and Retina glyph sizes.
+func _test_hud_shots() -> void:
+	log_line("\n[hud shots] legend and open HUD over the start lights (window captures)")
+	var rs: RaceStart = game.race_start
+	var win0 := get_window().size
+	var px0 := renderer.settings.glyph_px
+	renderer.fixed_output_size = Vector2i.ZERO
+	game.countdown_enabled = true
+	_opp_on(3)
+	for w: Array in [["16x9", Vector2i(1600, 900)], ["21x9", Vector2i(2100, 900)]]:
+		get_window().size = w[1]
+		for g: Array in [["default", px0], ["retina", 20]]:
+			if renderer.settings.glyph_px != g[1]:
+				renderer.settings.glyph_px = g[1]
+				await renderer.atlas_ready
+			game.controls.hud.visible = false
+			game.reset_to_grid()
+			while rs._lit < 3:
+				await get_tree().process_frame
+			await _window_shot("92_legend_%s_%s.png" % [w[0], g[0]])
+			if w[0] == "16x9" and g[0] == "default":
+				game.set_chase_view(true)
+				await _window_shot("92_legend_16x9_default_chase.png")
+				game.set_chase_view(false)
+			game.controls.hud.visible = true
+			for i in 3:
+				await get_tree().process_frame
+			await _window_shot("93_hud_open_%s_%s.png" % [w[0], g[0]])
+			var hr: Rect2 = game.controls.panel_rect()
+			log_line("  %s %s: window %s, legend at %s size %s; HUD panel %s" % [w[0], g[0], get_window().size,
+				game.controls.legend.position, game.controls.legend.size, hr])
+			game.controls.hud.visible = false
+			while rs.counting:
+				await get_tree().process_frame
+			await _frames(240)
+			await _window_shot("94_racing_%s_%s.png" % [w[0], g[0]])
+	game.countdown_enabled = false
+	rs.cancel()
+	_opp_off()
+	if renderer.settings.glyph_px != px0:
+		renderer.settings.glyph_px = px0
+		await renderer.atlas_ready
+	get_window().size = win0
+	renderer.fixed_output_size = SHOT_SIZE
+	await _frames(10)
+
+
+func _window_shot(file: String) -> void:
+	for i in 3:
+		await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(out_dir.path_join(file))

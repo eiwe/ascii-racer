@@ -1,22 +1,29 @@
 ## Render-setting keys and the HUD panel for an AsciiRenderer, shared by scenes.
 ##
-## Keys: 1-5 mode (emitted as `mode_requested`; the scene decides what a mode
+## Keys: 1-7 mode (emitted as `mode_requested`; the scene decides what a mode
 ## is, e.g. lighting), [ ] squeeze, ; ' vertical squeeze, - = glyph size,
 ## , . zoom (emitted as `zoom_requested`, the scene owns its camera), C colour,
 ## B bg tint, Tab raw 3D, H hud, P screenshot. Scenes add their own lines to the
 ## panel with `status_text` (above the settings) and `keys_text` (below), and
 ## name the current mode with `mode_text`.
+##
+## The panel starts hidden; while it is hidden a small dim legend in the top
+## left corner says how to open it (scenes can hide the legend too, e.g. during
+## a title sequence, with `legend_allowed`).
 class_name AsciiControls
 extends Node
 
 signal zoom_requested(step: int)
-## Keys 1-5: index 0..4.
+## Keys 1-7: index 0..6.
 signal mode_requested(index: int)
 
 const SQUEEZE_STEP: float = 0.05
 const BG_LEVELS: Array[float] = [0.0, 0.15, 0.3]
 const HUD_FONT: Font = preload("res://assets/fonts/HackNerdFontMono-Regular.ttf")
-const KEYS_HELP: String = """1-5 mode   [ ] squeeze   ; ' v-squeeze
+const LEGEND_TEXT: String = "H  debug menu"
+const LEGEND_COLOR: Color = Color(0.72, 0.74, 0.8, 0.85)
+const LEGEND_BG: Color = Color(0.0, 0.0, 0.0, 0.6)
+const KEYS_HELP: String = """1-7 mode   [ ] squeeze   ; ' v-squeeze
 - = glyph size   , . zoom   C colour   B bg tint
 Tab raw 3D   H hud   P screenshot"""
 
@@ -27,11 +34,17 @@ Tab raw 3D   H hud   P screenshot"""
 var status_text: String = ""
 ## Scene-specific key help shown at the bottom of the panel.
 var keys_text: String = ""
-## Name of the scene's current mode (keys 1-5), shown at the top of the settings.
+## Name of the scene's current mode (keys 1-7), shown at the top of the settings.
 var mode_text: String = ""
 
+## False hides the legend (the scene's own reasons: a title sequence, a menu).
+var legend_allowed: bool = true
+
 var hud: CanvasLayer
+var legend: Control
 var _label: Label
+var _panel: PanelContainer
+var _legend_layer: CanvasLayer
 
 
 ## UI scale for high-density displays: 2.0 on a Retina Mac, where one logical
@@ -47,7 +60,30 @@ func _ready() -> void:
 	hud = CanvasLayer.new()
 	hud.layer = 10
 	add_child(hud)
+	hud.visible = false # minimised: the legend below says how to open it
+	_legend_layer = CanvasLayer.new()
+	_legend_layer.layer = 10
+	add_child(_legend_layer)
+	# A small plate so the text reads over busy glyphs, still discreet.
+	var plate := PanelContainer.new()
+	var plate_style := StyleBoxFlat.new()
+	plate_style.bg_color = LEGEND_BG
+	plate_style.set_content_margin_all(3.0 * display_scale())
+	plate_style.content_margin_left = 6.0 * display_scale()
+	plate_style.content_margin_right = 6.0 * display_scale()
+	plate.add_theme_stylebox_override("panel", plate_style)
+	plate.position = Vector2(8.0, 8.0) * display_scale()
+	plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var text := Label.new()
+	text.text = LEGEND_TEXT
+	text.add_theme_font_override("font", HUD_FONT)
+	text.add_theme_font_size_override("font_size", roundi(13.0 * display_scale()))
+	text.add_theme_color_override("font_color", LEGEND_COLOR)
+	plate.add_child(text)
+	_legend_layer.add_child(plate)
+	legend = plate
 	var panel := PanelContainer.new()
+	_panel = panel
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0.0, 0.0, 0.0, 0.72)
 	style.set_content_margin_all(8.0)
@@ -64,7 +100,13 @@ func _ready() -> void:
 	panel.add_child(_label)
 
 
+## The open panel's rectangle in window pixels (empty while hidden).
+func panel_rect() -> Rect2:
+	return _panel.get_global_rect() if hud.visible and _panel != null else Rect2()
+
+
 func _process(_delta: float) -> void:
+	legend.visible = not hud.visible and legend_allowed
 	if not hud.visible or renderer == null:
 		return
 	var s := renderer.settings
@@ -87,7 +129,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	var s := renderer.settings
 	match k.keycode:
-		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5:
+		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7:
 			mode_requested.emit(k.keycode - KEY_1)
 		KEY_BRACKETLEFT:
 			set_squeeze(s.squeeze_x - SQUEEZE_STEP, s.squeeze_y - SQUEEZE_STEP)

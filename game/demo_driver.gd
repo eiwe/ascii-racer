@@ -43,11 +43,23 @@ var brake_down: float = 5.0
 ## handbrake drift; the hairpin always, others sometimes.
 const DRIFT_CURVATURE: float = 0.18
 var drift_chance_other: float = 0.4
+## Whether the hairpin is taken with the handbrake drift.
+var drift_hairpin: bool = true
+## Hand steadiness: amplitude of the line's wobble (units), and the lap-to-lap
+## spread of corner speed and braking (multipliers, min..max).
+var wobble: float = 0.06
+var lap_speed_range: Vector2 = Vector2(0.95, 1.03)
+var lap_brake_range: Vector2 = Vector2(0.9, 1.05)
+## Set every step by a subclass (OpponentDriver): a lateral shift of the line
+## (units, + = right) and a cap on the target speed (u/s), e.g. to go round or
+## follow another car.
+var lateral_bias: float = 0.0
+var speed_cap: float = INF
 ## In a drift: stick toward the inside, plus this much per radian of path error.
 var drift_inside: float = 0.0
 var drift_gain: float = 4.0
 ## Flat out from here to here (the jump), as s along the lap.
-const FLAT_OUT: Vector2 = Vector2(19.0, 32.5)
+const FLAT_OUT: Vector2 = Vector2(19.0, 33.5)
 ## Body slip beyond which an unplanned slide is caught.
 const SLIDE_CATCH_DEG: float = 8.0
 ## Steering is capped at the angle that asks the tyres for this share of their
@@ -162,12 +174,12 @@ func _find_corners() -> void:
 ## Fresh variation for the coming lap, and the speed profile that goes with it.
 func _new_lap() -> void:
 	_lap_amp = _rng.randf_range(0.82, 1.0)
-	_lap_speed = _rng.randf_range(0.95, 1.03)
-	_lap_brake = _rng.randf_range(0.9, 1.05)
+	_lap_speed = _rng.randf_range(lap_speed_range.x, lap_speed_range.y)
+	_lap_brake = _rng.randf_range(lap_brake_range.x, lap_brake_range.y)
 	_wobble_phase = _rng.randf() * TAU
 	_drift_plan.clear()
 	for c: Array in _corners:
-		_drift_plan.append(c[3] or _rng.randf() < drift_chance_other)
+		_drift_plan.append(c[3] and drift_hairpin or _rng.randf() < drift_chance_other)
 	_build_speed()
 
 
@@ -176,7 +188,8 @@ func _line_point(s: float) -> Vector3:
 	var f := fposmod(s, track.length) / track.length * n
 	var i := int(f) % n
 	var o := lerpf(_offset[i], _offset[(i + 1) % n], f - int(f)) * _lap_amp
-	o += 0.06 * sin(s * 0.21 + _wobble_phase) # a hand is never perfectly steady
+	o += wobble * sin(s * 0.21 + _wobble_phase) # a hand is never perfectly steady
+	o += lateral_bias
 	var t := track.tangent_at(s)
 	return track.point_at(s) + Vector3(-t.z, 0.0, t.x).normalized() * o
 
@@ -276,7 +289,7 @@ func _physics_process(delta: float) -> void:
 		steer = clampf(steer, -cap, cap)
 
 	# Speed: aim for the profile a little ahead (reaction time).
-	var want := _speed_at(progress + maxf(v, 0.0) * 0.3)
+	var want := minf(_speed_at(progress + maxf(v, 0.0) * 0.3), speed_cap)
 	var thr := clampf((want - v) * 1.6 + 0.15, 0.0, 1.0)
 	var brk := clampf((v - want - 0.25) * 0.9, 0.0, 1.0)
 	if lost:

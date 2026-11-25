@@ -39,6 +39,7 @@ func _ready() -> void:
 	chase = ChaseCamera.new()
 	chase.target = car
 	add_child(chase)
+	lighting.set_mode(Lighting.DEFAULT_MODE)
 
 
 ## Where the car starts: on the centre line, behind the start line.

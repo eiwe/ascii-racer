@@ -61,6 +61,16 @@ func _cross_line() -> void:
 	lap_completed.emit(last)
 
 
+## A standing start (lights out): lap 1 runs from now. The car is on the grid
+## just behind the line; crossing it moments later does not count as a lap
+## (the checkpoints have not been passed).
+func start_standing() -> void:
+	started = true
+	lap = 1
+	current = 0.0
+	next_checkpoint = 0
+
+
 ## Back to "not started", times cleared.
 func reset() -> void:
 	started = false

@@ -23,7 +23,7 @@ const SETTINGS_PATH: String = "user://audio_settings.cfg"
 ## Music level by context (dB on the Music bus at 100 %), and the car's level
 ## in the reel (dB on the SFX bus). Set by measurement (drive test `audio`).
 const MUSIC_MENU_DB: float = -0.5
-const MUSIC_RACE_DB: float = -4.5
+const MUSIC_RACE_DB: float = -2.5
 const MUSIC_PAUSED_DB: float = -8.0
 const SFX_MENU_DB: float = -13.0
 const SFX_RACE_DB: float = 0.0
@@ -51,6 +51,12 @@ var master_volume: float = DEFAULT_VOLUME
 var music_volume: float = DEFAULT_VOLUME
 var sfx_volume: float = DEFAULT_VOLUME
 var muted: bool = false
+## The pause menu's other setting, kept in the same file ([game] section):
+## the AI opponent's difficulty, 0 = off, 1..5.
+const DEFAULT_OPPONENT_LEVEL: int = 3
+var opponent_level: int = DEFAULT_OPPONENT_LEVEL
+## The isometric camera's zoom: 0 = AUTO, 1.. = FollowCamera.ZOOM_STEPS[n - 1].
+var zoom_setting: int = 0
 var settings_path: String = SETTINGS_PATH
 ## True when a volume or the mute changed since the settings were loaded or saved.
 var dirty: bool = false
@@ -146,6 +152,7 @@ func _setup_buses() -> void:
 		AudioServer.add_bus_effect(engine, AudioEffectLowPassFilter.new())
 	bus_index("Tyres", "SFX")
 	bus_index("Effects", "SFX")
+	bus_index("Opponent", "SFX")
 	_preview_bus = bus_index("Preview", "Master")
 
 
@@ -276,6 +283,16 @@ func set_sfx_volume(v: float) -> void:
 	blip()
 
 
+func set_opponent_level(l: int) -> void:
+	opponent_level = clampi(l, 0, 5)
+	dirty = true
+
+
+func set_zoom_setting(z: int) -> void:
+	zoom_setting = clampi(z, 0, FollowCamera.ZOOM_STEPS.size())
+	dirty = true
+
+
 func toggle_mute() -> bool:
 	muted = not muted
 	dirty = true
@@ -316,6 +333,8 @@ func load_settings() -> void:
 	music_volume = clampf(float(cfg.get_value("audio", "music", DEFAULT_VOLUME)), 0.0, 1.0)
 	sfx_volume = clampf(float(cfg.get_value("audio", "sfx", DEFAULT_VOLUME)), 0.0, 1.0)
 	muted = bool(cfg.get_value("audio", "muted", false))
+	opponent_level = clampi(int(cfg.get_value("game", "opponent", DEFAULT_OPPONENT_LEVEL)), 0, 5)
+	zoom_setting = clampi(int(cfg.get_value("game", "zoom", 0)), 0, FollowCamera.ZOOM_STEPS.size())
 
 
 ## Writes the settings file if anything changed.
@@ -328,6 +347,8 @@ func save_settings() -> void:
 	cfg.set_value("audio", "music", music_volume)
 	cfg.set_value("audio", "sfx", sfx_volume)
 	cfg.set_value("audio", "muted", muted)
+	cfg.set_value("game", "opponent", opponent_level)
+	cfg.set_value("game", "zoom", zoom_setting)
 	if cfg.save(settings_path) != OK:
 		push_warning("could not save audio settings to " + settings_path)
 

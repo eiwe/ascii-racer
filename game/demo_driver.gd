@@ -44,12 +44,17 @@ var brake_down: float = 5.0
 const DRIFT_CURVATURE: float = 0.18
 var drift_chance_other: float = 0.4
 ## In a drift: stick toward the inside, plus this much per radian of path error.
-var drift_inside: float = 0.1
+var drift_inside: float = 0.0
 var drift_gain: float = 4.0
 ## Flat out from here to here (the jump), as s along the lap.
-const FLAT_OUT: Vector2 = Vector2(19.0, 31.5)
+const FLAT_OUT: Vector2 = Vector2(19.0, 32.5)
 ## Body slip beyond which an unplanned slide is caught.
-const SLIDE_CATCH_DEG: float = 12.0
+const SLIDE_CATCH_DEG: float = 8.0
+## Steering is capped at the angle that asks the tyres for this share of their
+## grip at the current speed (a driver does not crank full lock at speed).
+var steer_grip_share: float = 0.95
+## Wheelbase used for that cap (the kit car's axles are 0.5 apart).
+const WHEELBASE: float = 0.5
 
 var car: Car
 var track: Track
@@ -265,6 +270,10 @@ func _physics_process(delta: float) -> void:
 	var err := fwd.signed_angle_to(to, Vector3.DOWN)
 	var lock := maxf(car.steer_lock, deg_to_rad(4.0))
 	var steer := clampf(err / lock * steer_gain, -1.0, 1.0)
+	if v > 1.0:
+		var a_max := car.grip_road * Car.G * minf(car.front_grip, car.rear_grip) * steer_grip_share
+		var cap := atan(WHEELBASE * a_max / (v * v)) / lock
+		steer = clampf(steer, -cap, cap)
 
 	# Speed: aim for the profile a little ahead (reaction time).
 	var want := _speed_at(progress + maxf(v, 0.0) * 0.3)
@@ -295,12 +304,15 @@ func _physics_process(delta: float) -> void:
 			vel.y = 0.0
 			var perr := vel.signed_angle_to(to, Vector3.DOWN)
 			steer = dir * clampf(drift_inside + perr * dir * drift_gain, -0.4, 1.0)
+			if car.drift_state == Car.Drift.NONE and _drift_tap > 0.0:
+				# Kicking it in: enough lock for the car to start the drift.
+				steer = dir * maxf(absf(steer), 0.5)
 			thr = clampf(0.85 - car.drift_angle * 0.6, 0.4, 1.0)
 			brk = 0.0
 	elif absf(car.slip_angle) > deg_to_rad(SLIDE_CATCH_DEG) and v > 1.5:
 		# An unplanned slide (power oversteer, a kerb): counter-steer and ease off.
-		steer = clampf(steer + car.slip_angle / deg_to_rad(15.0), -1.0, 1.0)
-		thr *= 0.4
+		steer = clampf(steer + car.slip_angle / deg_to_rad(12.0), -1.0, 1.0)
+		thr *= 0.2
 	if _drift_corner < 0 and c >= 0 and _drift_plan[c] and v > car.drift_min_speed + 1.0:
 		var cc: Array = _corners[c]
 		var to_entry := fposmod(cc[0] - progress, track.length)

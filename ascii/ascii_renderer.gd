@@ -11,14 +11,14 @@ extends Node
 signal grid_changed
 signal atlas_ready
 
-const SLOTS: int = 3
+const SLOTS: int = 2 ## cell texels: glyph + ink, background
 ## Visual layer (20) that only the gbuffer camera renders: holds the export quad.
 const GBUFFER_LAYER: int = 1 << 19
+## Visual layer (18) of the white lighting twins used by shadow hatching.
+const LIGHT_LAYER: int = 1 << 17
 const RAMP_LUT_SIZE: int = 64
-const HATCH_MAX: int = 8
 const RAMP_MAX: int = 32
 const SHAPE_MAX: int = 128
-const LINE_CHARS: String = "-/|\\_'"
 
 const DEFAULT_FONT: Font = preload("res://assets/fonts/HackNerdFontMono-Bold.ttf")
 const GBUFFER_SHADER: Shader = preload("res://ascii/shaders/gbuffer.gdshader")
@@ -38,6 +38,32 @@ const COMPOSE_SHADER: Shader = preload("res://ascii/shaders/compose.gdshader")
 ## geometry dissolves into the void; (0, 0) = off (the default, and always off
 ## for orthographic cameras).
 var distance_fade: Vector2 = Vector2.ZERO
+
+## Shadow hatching: cells in shadow are drawn as their own texture (sparse
+## diagonal hatching in a cool ink), and cells on the lit/shadow boundary get a
+## glyph shaped like the boundary. Needs lighting separated from surface colour,
+## so while on, a third viewport renders the world as lighting only: every mesh
+## gets a white twin on LIGHT_LAYER that only that viewport sees.
+## (Viewport.DEBUG_DRAW_LIGHTING would be simpler but does nothing in exported
+## release builds.) Off (the default): no viewport, no twins, no cost, no change.
+var shadow_hatch: bool = false:
+	set(v):
+		shadow_hatch = v
+		if is_node_ready():
+			_apply_shadow_hatch()
+## Hatching look: a sample whose lighting-pass brightness (luma) is below
+## hatch_threshold counts as shadow; the hatch glyph and its ink (dimmed with
+## the cell's own brightness).
+var hatch_threshold: float = 0.35
+var hatch_glyph: String = "/"
+var hatch_ink: Color = Color(0.35, 0.55, 1.0)
+## Every hatch_period-th diagonal of cells carries a hatch glyph.
+var hatch_period: int = 3
+## Glyphs the lit/shadow boundary may use (line-like, so the edge reads as a line).
+var hatch_edge_chars: String = "_-'\"^/\\|.,`"
+const HATCH_EDGE_MAX: int = 16
+## Lighting-only render of the scene while shadow_hatch is on (else null).
+var light_viewport: SubViewport
 
 ## Whether the overlay cell layer (get_overlay()) is drawn.
 var overlay_enabled: bool = false
@@ -70,6 +96,9 @@ var _compose_material: ShaderMaterial
 var _display: TextureRect
 var _atlas_key: Array = []
 var _overlay: AsciiOverlay
+var _light_camera: Camera3D
+var _light_twins: Array[MeshInstance3D] = []
+var _light_material: StandardMaterial3D
 
 
 func _ready() -> void:
@@ -95,6 +124,65 @@ func get_overlay() -> AsciiOverlay:
 		_cells_material.set_shader_parameter("overlay_tex", _overlay.texture)
 	overlay_enabled = true
 	return _overlay
+
+
+func _apply_shadow_hatch() -> void:
+	if shadow_hatch and light_viewport == null:
+		light_viewport = SubViewport.new()
+		light_viewport.name = "LightViewport"
+		light_viewport.world_3d = _world
+		light_viewport.msaa_3d = scene_viewport.msaa_3d
+		light_viewport.size = scene_viewport.size
+		add_child(light_viewport, false, INTERNAL_MODE_FRONT)
+		_light_camera = Camera3D.new()
+		_light_camera.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+		light_viewport.add_child(_light_camera)
+		_light_camera.current = true
+	_set_light_twins(shadow_hatch)
+	if light_viewport != null:
+		light_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS if shadow_hatch else SubViewport.UPDATE_DISABLED
+		_cells_material.set_shader_parameter("light_tex", light_viewport.get_texture())
+	_cells_material.set_shader_parameter("hatch_on", shadow_hatch)
+	if atlas.ready_to_use:
+		_cells_material.set_shader_parameter("hatch_glyph", atlas.index_of(hatch_glyph))
+	_cells_material.set_shader_parameter("hatch_threshold", hatch_threshold)
+	_cells_material.set_shader_parameter("hatch_ink", Vector3(hatch_ink.r, hatch_ink.g, hatch_ink.b))
+	_cells_material.set_shader_parameter("hatch_period", hatch_period)
+
+
+## White twins of every mesh in the scene, seen only by the lighting camera,
+## so it sees the scene's lighting on a white world. Shadow casters are culled
+## by the camera's mask as well, so the twins cast like their originals (each
+## camera gets the same shadows, from one or the other).
+## Lights are culled by camera cull masks too, so they join LIGHT_LAYER meanwhile.
+func _set_light_twins(on: bool) -> void:
+	for l: Light3D in scene_viewport.find_children("*", "Light3D", true, false):
+		if on:
+			l.layers |= LIGHT_LAYER
+		else:
+			l.layers &= ~LIGHT_LAYER
+	for t in _light_twins:
+		if is_instance_valid(t):
+			t.get_parent().remove_child(t)
+			t.free()
+	_light_twins.clear()
+	if not on:
+		return
+	if _light_material == null:
+		_light_material = StandardMaterial3D.new()
+		_light_material.albedo_color = Color.WHITE
+		_light_material.roughness = 1.0
+	for mi: MeshInstance3D in scene_viewport.find_children("*", "MeshInstance3D", true, false):
+		if mi.layers & (GBUFFER_LAYER | LIGHT_LAYER) or mi.mesh == null:
+			continue
+		var t := MeshInstance3D.new()
+		t.name = "LightTwin"
+		t.mesh = mi.mesh
+		t.material_override = _light_material
+		t.layers = LIGHT_LAYER
+		t.cast_shadow = mi.cast_shadow
+		mi.add_child(t, false, INTERNAL_MODE_BACK)
+		_light_twins.append(t)
 
 
 func is_atlas_ready() -> bool:
@@ -170,7 +258,7 @@ func _build_pipeline() -> void:
 	_gbuffer_camera = Camera3D.new()
 	# Its transform is copied every frame; interpolating it would lag the scene camera.
 	_gbuffer_camera.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
-	_gbuffer_camera.cull_mask = 0xFFFFF
+	_gbuffer_camera.cull_mask = 0xFFFFF & ~LIGHT_LAYER
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
 	env.background_color = Color.BLACK
@@ -277,6 +365,11 @@ func _apply_glyph_tables() -> void:
 		return
 	var m := _cells_material
 	m.set_shader_parameter("ramp_lut", atlas.ramp_lut(settings.ramp_chars, RAMP_LUT_SIZE))
+	m.set_shader_parameter("hatch_glyph", atlas.index_of(hatch_glyph))
+	var edge := atlas.sorted_ramp(hatch_edge_chars)
+	m.set_shader_parameter("hatch_edge_count", mini(edge.size(), HATCH_EDGE_MAX))
+	edge.resize(HATCH_EDGE_MAX)
+	m.set_shader_parameter("hatch_edge_glyphs", edge)
 	var ramp := atlas.sorted_ramp(settings.ramp_chars)
 	ramp.resize(RAMP_MAX)
 	m.set_shader_parameter("ramp_glyphs", ramp)
@@ -289,15 +382,6 @@ func _apply_glyph_tables() -> void:
 	m.set_shader_parameter("shape_count", mini(cand.size(), SHAPE_MAX))
 	cand.resize(SHAPE_MAX)
 	m.set_shader_parameter("shape_glyphs", cand)
-	m.set_shader_parameter("line_glyphs", atlas.indices(LINE_CHARS, LINE_CHARS.length()))
-	var fams: Array[String] = [settings.hatch_top, settings.hatch_left, settings.hatch_right, settings.hatch_front]
-	var names: PackedStringArray = ["hatch_top", "hatch_left", "hatch_right", "hatch_front"]
-	var lens := Vector4i.ONE
-	for f in fams.size():
-		var s := fams[f] if fams[f] != "" else " "
-		m.set_shader_parameter(names[f], atlas.indices(s, HATCH_MAX))
-		lens[f] = clampi(s.length(), 1, HATCH_MAX)
-	m.set_shader_parameter("hatch_len", lens)
 
 
 func _relayout() -> void:
@@ -313,6 +397,8 @@ func _relayout() -> void:
 	var scene_size := Vector2i((Vector2(output_size) * scale).round()).max(Vector2i.ONE)
 	scene_viewport.size = scene_size
 	gbuffer_viewport.size = scene_size
+	if light_viewport != null:
+		light_viewport.size = scene_size
 	output_viewport.size = output_size
 	_compose_rect.size = Vector2(output_size)
 	_display.texture = scene_viewport.get_texture() if raw_view else output_viewport.get_texture()
@@ -335,8 +421,6 @@ func _relayout() -> void:
 	var m := _cells_material
 	m.set_shader_parameter("grid", Vector2i(cols, rows))
 	m.set_shader_parameter("pitch_uv", Vector2(pitch) / Vector2(output_size))
-	m.set_shader_parameter("pitch_px", Vector2(pitch))
-	m.set_shader_parameter("method", int(settings.method))
 	m.set_shader_parameter("exposure", settings.exposure)
 	m.set_shader_parameter("contrast", settings.contrast)
 	m.set_shader_parameter("gamma", settings.gamma)
@@ -345,9 +429,6 @@ func _relayout() -> void:
 	m.set_shader_parameter("mono_ink", Vector3(mc.r, mc.g, mc.b))
 	m.set_shader_parameter("color_boost", settings.color_boost)
 	m.set_shader_parameter("bg_strength", settings.bg_strength)
-	m.set_shader_parameter("depth_threshold", settings.edge_depth_threshold)
-	m.set_shader_parameter("normal_threshold", settings.edge_normal_threshold)
-	m.set_shader_parameter("overstrike_boost", settings.overstrike_boost)
 	m.set_shader_parameter("shape_contrast", settings.shape_contrast)
 	m.set_shader_parameter("shape_flat_threshold", settings.shape_flat_threshold)
 	m.set_shader_parameter("shape_ink_penalty", settings.shape_ink_penalty)
@@ -365,7 +446,7 @@ func _process(_delta: float) -> void:
 	var cam := scene_viewport.get_camera_3d()
 	if cam == null:
 		return
-	cam.cull_mask &= ~GBUFFER_LAYER
+	cam.cull_mask &= ~(GBUFFER_LAYER | LIGHT_LAYER)
 	var g := _gbuffer_camera
 	g.global_transform = cam.global_transform
 	g.projection = cam.projection
@@ -377,22 +458,34 @@ func _process(_delta: float) -> void:
 	g.h_offset = cam.h_offset
 	g.v_offset = cam.v_offset
 	g.frustum_offset = cam.frustum_offset
+	if shadow_hatch and _light_camera != null:
+		var lc := _light_camera
+		lc.cull_mask = LIGHT_LAYER
+		lc.global_transform = cam.global_transform
+		lc.projection = cam.projection
+		lc.keep_aspect = cam.keep_aspect
+		lc.size = cam.size
+		lc.fov = cam.fov
+		lc.near = cam.near
+		lc.far = cam.far
+		lc.h_offset = cam.h_offset
+		lc.v_offset = cam.v_offset
+		lc.frustum_offset = cam.frustum_offset
+		# Anchor the hatch pattern to the world in ortho: with grid snap the
+		# world origin sits at a fixed fraction of a cell, so its cell index
+		# moves by whole cells and the hatching moves with the ground.
+		var origin := Vector2i.ZERO
+		if cam.projection == Camera3D.PROJECTION_ORTHOGONAL:
+			var c := cam.unproject_position(Vector3.ZERO) / Vector2(scene_viewport.size) * Vector2(output_size) / Vector2(pitch)
+			origin = Vector2i(floori(c.x + 0.5), floori(c.y + 0.5))
+		_cells_material.set_shader_parameter("hatch_origin", origin)
 
-	var aspect := float(scene_viewport.size.x) / float(scene_viewport.size.y)
 	var ortho := cam.projection == Camera3D.PROJECTION_ORTHOGONAL
-	var extent := cam.size if ortho else 2.0 * tan(deg_to_rad(cam.fov) * 0.5)
-	var world_per_uv := Vector2(extent * aspect, extent)
-	if cam.keep_aspect == Camera3D.KEEP_WIDTH:
-		world_per_uv = Vector2(extent, extent / aspect)
-	var basis := cam.global_basis.orthonormalized()
 	_gbuffer_material.set_shader_parameter("far_plane", cam.far)
 	_cells_material.set_shader_parameter("far_plane", cam.far)
-	_cells_material.set_shader_parameter("ortho", ortho)
 	var fade := Vector2.ZERO if ortho else distance_fade
 	_cells_material.set_shader_parameter("fade_begin", fade.x)
 	_cells_material.set_shader_parameter("fade_end", fade.y)
-	_cells_material.set_shader_parameter("world_per_uv", world_per_uv)
-	_cells_material.set_shader_parameter("view_up", basis.transposed() * Vector3.UP)
 	var ov := overlay_enabled and _overlay != null and not raw_view
 	_cells_material.set_shader_parameter("overlay_on", ov)
 	if ov:

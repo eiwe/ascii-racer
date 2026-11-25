@@ -98,7 +98,7 @@ fi
 if [ "$SMOKE" = 1 ]; then
 	step "Smoke test (Linux build, opens a window briefly)"
 	SMOKE_DIR="$(mktemp -d)"
-	if ! timeout 90 build/linux/ascii-racer.x86_64 --fixed-fps 120 -- --drivetest="$SMOKE_DIR" --dtonly=spawn >"$SMOKE_DIR/log.txt" 2>&1; then
+	if ! timeout 90 build/linux/ascii-racer.x86_64 --audio-driver Dummy --fixed-fps 120 -- --drivetest="$SMOKE_DIR" --dtonly=spawn >"$SMOKE_DIR/log.txt" 2>&1; then
 		tail -20 "$SMOKE_DIR/log.txt" >&2; echo "smoke test failed" >&2; exit 1
 	fi
 	grep -q 'wheels grounded 4' "$SMOKE_DIR/results.txt" || { cat "$SMOKE_DIR/results.txt" >&2; echo "smoke test: car did not settle on its wheels" >&2; exit 1; }

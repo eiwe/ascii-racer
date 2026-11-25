@@ -156,8 +156,8 @@ func _run() -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--dtonly="):
 			only = arg.trim_prefix("--dtonly=")
-	for t: String in ["spawn", "accel_brake", "turns", "handbrake", "drift", "feel", "offroad", "kerbs", "tree", "cones", "jump", "bridge", "reset_bridge", "keys",
-			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "top_down", "grid_snap"]:
+	for t: String in ["spawn", "accel_brake", "corners", "limit", "nitro", "nitro_shots", "turns", "handbrake", "drift", "feel", "offroad", "kerbs", "tree", "cones", "jump", "bridge", "reset_bridge", "keys",
+			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause"]:
 		if only == "" or t in only.split(","):
 			await call("_test_" + t)
 	log_line("\n[summary] preset %s" % game.tuning.current)
@@ -167,7 +167,7 @@ func _run() -> void:
 	var f := FileAccess.open(out_dir.path_join("results.txt"), FileAccess.WRITE)
 	f.store_string("\n".join(_log) + "\n")
 	f.close()
-	get_tree().quit()
+	game.audio.quit()
 
 
 func _test_spawn() -> void:
@@ -532,21 +532,38 @@ func _test_keys() -> void:
 	var snap0 := camera.snap_to_grid
 	_key(KEY_G, true)
 	_key(KEY_G, false)
-	var m0 := renderer.settings.method
+	var m0: String = game.lighting.mode_name()
 	_key(KEY_2, true)
 	_key(KEY_2, false)
-	var m1 := renderer.settings.method
-	_key(KEY_3, true)
-	_key(KEY_3, false)
+	var m1: String = game.lighting.mode_name()
+	# Sun keys in lighting 2: L swings it round, I raises it (held 0.5 s each).
+	var az0: float = game.lighting.sun_az
+	var el0: float = game.lighting.sun_el
+	_key(KEY_L, true)
+	await _frames(60)
+	_key(KEY_L, false)
+	_key(KEY_I, true)
+	await _frames(60)
+	_key(KEY_I, false)
+	await _frames(2)
+	log_line("  2 then L, I held 0.5 s: sun az %.1f -> %.1f, el %.1f -> %.1f; HUD \"%s\"" % [
+		az0, game.lighting.sun_az, el0, game.lighting.sun_el, game.controls.mode_text])
+	game.lighting.reset_sun()
+	_key(KEY_1, true)
+	_key(KEY_1, false)
+	_key(KEY_L, true)
+	await _frames(30)
+	_key(KEY_L, false)
+	log_line("  1 then L: classic sun unchanged %s" %
+		game.lighting.sun.basis.is_equal_approx(Basis.looking_at(-Lighting.CLASSIC_FROM.normalized(), Vector3.UP)))
 	var z0 := camera.size
 	_key(KEY_COMMA, true)
 	_key(KEY_COMMA, false)
 	var z1 := camera.size
 	_key(KEY_PERIOD, true)
 	_key(KEY_PERIOD, false)
-	log_line("  G: snap %s -> %s; 2: method %s -> %s (3 restores %s); ,: zoom %.1f -> %.1f (. restores %.1f)" % [
-		snap0, camera.snap_to_grid, AsciiSettings.METHOD_NAMES[m0], AsciiSettings.METHOD_NAMES[m1],
-		renderer.settings.method_name(), z0, z1, camera.size])
+	log_line("  G: snap %s -> %s; 2: lighting %s -> %s (1 restores %s); ,: zoom %.1f -> %.1f (. restores %.1f)" % [
+		snap0, camera.snap_to_grid, m0, m1, game.lighting.mode_name(), z0, z1, camera.size])
 	camera.snap_to_grid = snap0
 	# R: drive off the road onto the pad... then reset (the pad counts as road, so use the circuit).
 	car.player_input = false
@@ -761,10 +778,11 @@ func _compare(ia: Image, ib: Image, s: Vector2i, tree_c: Vector2i) -> Array:
 			if xb < 0 or yb < 0 or xb >= cols or yb >= rows:
 				continue
 			n += 1
-			var a0 := ia.get_pixel(x * 3, y)
-			var b0 := ib.get_pixel(xb * 3, yb)
-			var a2 := ia.get_pixel(x * 3 + 2, y)
-			var b2 := ib.get_pixel(xb * 3 + 2, yb)
+			var k := AsciiRenderer.SLOTS
+			var a0 := ia.get_pixel(x * k, y)
+			var b0 := ib.get_pixel(xb * k, yb)
+			var a2 := ia.get_pixel(x * k + k - 1, y)
+			var b2 := ib.get_pixel(xb * k + k - 1, yb)
 			var gd := roundi(a0.a * 255.0) != roundi(b0.a * 255.0)
 			if gd:
 				glyph += 1
@@ -1071,7 +1089,7 @@ func _test_pad() -> void:
 		res.append("D-pad %s->steer %.1f" % ["left" if b == JOY_BUTTON_DPAD_LEFT else "right", car.steer_input])
 		_joy_button(b, false)
 	log_line("  " + ", ".join(res))
-	for b: JoyButton in [JOY_BUTTON_Y, JOY_BUTTON_BACK]:
+	for b: JoyButton in [JOY_BUTTON_Y]: # Back opens the tuning panel now
 		car.player_input = false
 		await _place(INFIELD, Vector3.RIGHT)
 		car.player_input = true
@@ -1128,8 +1146,8 @@ func _test_panel() -> void:
 	res.clear()
 	tun.select("balanced")
 	# Open, navigate, adjust, hold to repeat, reset.
-	await _tap(JOY_BUTTON_START)
-	res.append("Start: open %s, arrows drive %s" % [panel.is_open, car.arrow_keys_drive])
+	await _tap(JOY_BUTTON_BACK)
+	res.append("Back: open %s, arrows drive %s" % [panel.is_open, car.arrow_keys_drive])
 	var sel0 := panel.selected
 	await _tap(JOY_BUTTON_DPAD_DOWN)
 	await _tap(JOY_BUTTON_DPAD_DOWN)
@@ -1171,8 +1189,8 @@ func _test_panel() -> void:
 	reload.select(CarTuning.CUSTOM)
 	res.append("select custom from reload: rear_grip %.2f -> %.2f" % [rear_bal, car.rear_grip])
 	tun.select("balanced")
-	await _tap(JOY_BUTTON_START)
-	res.append("Start: open %s, arrows drive %s" % [panel.is_open, car.arrow_keys_drive])
+	await _tap(JOY_BUTTON_BACK)
+	res.append("Back: open %s, arrows drive %s" % [panel.is_open, car.arrow_keys_drive])
 	log_line("  pad: " + "; ".join(res))
 	res.clear()
 	# Keyboard: F1, arrows navigate (and do not drive) while open, WASD drives, Backspace, F2/F3, F5.
@@ -1643,9 +1661,9 @@ func _stop_line(ap: Autopilot) -> void:
 
 ## The table-top jump at top speed, about 50% and 25%.
 func _test_jump() -> void:
-	log_line("\n[jump] table-top on the main straight (kicker s 22.5..25.5 to 0.6 high, table to 27, landing to 31.5)")
+	log_line("\n[jump] table-top on the main straight (kicker s 21..24 to 0.4 high, table to 26, landing slope to 32.5)")
 	for frac: float in [1.0, 0.5, 0.25]:
-		var v := 7.7 * frac
+		var v := car.top_speed * 0.91 * frac
 		await _place_on_track(16.0, 0.0, v)
 		var take_off := -1
 		var land := -1
@@ -1657,6 +1675,8 @@ func _test_jump() -> void:
 		var bounce := 0
 		var v_take := 0.0
 		var was_air := false
+		var land_s := -1.0
+		var comp := 0.0
 		var prog := track.progress(car.global_position)
 		var ap := _start_line(v + (0.8 if frac >= 1.0 else 0.0))
 		for i in 360:
@@ -1673,7 +1693,9 @@ func _test_jump() -> void:
 				if not air and i - take_off > 2:
 					land = i
 					p1 = car.global_position
+					land_s = prog
 			if land >= 0 and i - land < 60:
+				comp = maxf(comp, car.suspension_compression())
 				land_tilt = maxf(land_tilt, rad_to_deg(car.global_basis.y.angle_to(track.pose_at(prog).basis.y)))
 				if air and not was_air:
 					bounce += 1
@@ -1689,10 +1711,10 @@ func _test_jump() -> void:
 			continue
 		var air_t := (land - take_off) / 120.0 if land >= 0 else -1.0
 		var dist := Vector2(p1.x - p0.x, p1.z - p0.z).length()
-		log_line("  %3.0f%% (%.1f u/s, %.2f at take-off): air %.2f s over %.2f u, highest %.2f above the road below, tilt in the air max %.1f deg; after landing tilt max %.1f deg vs the road, %d bounce(s); upright %s, speed %.2f" % [
-			frac * 100.0, v, v_take, air_t, dist, max_h, air_tilt, land_tilt, bounce, car.is_upright(), _speed()])
-		_m["jump_%d" % roundi(frac * 100.0)] = "air %.2f s, %.2f u, peak %.2f, landing tilt %.1f deg, bounces %d, upright %s" % [
-			air_t, dist, max_h, land_tilt, bounce, car.is_upright()]
+		log_line("  %3.0f%% (%.1f u/s, %.2f at take-off): air %.2f s over %.2f u, highest %.2f above the road below, tilt in the air max %.1f deg; lands at s %.1f (slope 26..32.5), suspension max %d%% after landing, tilt max %.1f deg vs the road, %d bounce(s); upright %s, speed %.2f" % [
+			frac * 100.0, v, v_take, air_t, dist, max_h, air_tilt, land_s, roundi(comp * 100.0), land_tilt, bounce, car.is_upright(), _speed()])
+		_m["jump_%d" % roundi(frac * 100.0)] = "air %.2f s, %.2f u, lands s %.1f, suspension %d%%, peak %.2f, landing tilt %.1f deg, bounces %d, upright %s" % [
+			air_t, dist, land_s, roundi(comp * 100.0), max_h, land_tilt, bounce, car.is_upright()]
 	_inputs(0.0, 0.0, 1.0, false)
 	await _frames(60)
 
@@ -1812,7 +1834,7 @@ func _stick(x: float, y: float) -> void:
 
 
 ## The chase camera: switching, the views, right-stick orbit, line of sight,
-## distance fade, the five render methods in perspective, fps.
+## distance fade, the five lighting modes in perspective, fps.
 func _test_chase() -> void:
 	log_line("\n[chase] rear chase camera (toggle Q / pad B)")
 	var chase: ChaseCamera = game.chase
@@ -1932,12 +1954,13 @@ func _test_chase() -> void:
 	game.chase_fade = true
 	game.set_chase_view(true)
 
-	# Every render method in perspective.
-	var m0 := renderer.settings.method
-	for m in AsciiSettings.METHOD_NAMES.size():
-		renderer.settings.method = m as AsciiSettings.Method
-		await _shot("38_chase_method_%d_%s.png" % [m + 1, AsciiSettings.METHOD_NAMES[m]])
-	renderer.settings.method = m0
+	# Every lighting mode in perspective.
+	var m0: int = game.lighting.mode
+	for m in Lighting.MODES.size():
+		game.lighting.set_mode_frozen(m)
+		await _shot("38_chase_lighting_%d_%s.png" % [m + 1, String(Lighting.MODES[m].name).replace(" ", "-")])
+	game.lighting.sweep_running = true
+	game.lighting.set_mode(m0)
 
 	# Frame rate (real time, vsync off), chase vs iso, on the circuit.
 	var fps := []
@@ -1993,7 +2016,7 @@ func _test_demo_laps() -> void:
 		if arg.begins_with("--demotune="):
 			for kv in arg.trim_prefix("--demotune=").split(",", false):
 				var p := kv.split("=")
-				d.set(p[0], float(p[1]))
+				d.set(p[0], int(p[1]) if p[0] == "rng_seed" else float(p[1]))
 	add_child(d)
 	d.reset_requested.connect(func() -> void:
 		log_line("    quiet reset at s %.1f" % d.progress)
@@ -2133,3 +2156,986 @@ func _test_halo() -> void:
 	camera.snap_to_grid = keep_snap
 	_inputs(0.0, 0.0, 1.0, false)
 	await _frames(30)
+
+
+
+## Every lighting mode from the same poses: iso (start line, trees, the bridge
+## from both strands, the hairpin), chase, and a cinematic shot.
+func _test_lighting() -> void:
+	log_line("\n[lighting] the five lighting modes from fixed poses")
+	var l: Lighting = game.lighting
+	var m0 := l.mode
+	var sc := track.progress(track.crossing_point)
+	# The stretch of road nearest a tree.
+	var tree_s := 60.0
+	var best := INF
+	for prop in world.props.get_children():
+		if prop is StaticBody3D and prop.position.distance_to(track.point_at(Track.START_S)) > 5.0:
+			var ts := track.progress(prop.position)
+			var d := absf(track.lateral_offset(prop.position, ts))
+			if d < best:
+				best = d
+				tree_s = ts
+	var poses := [
+		["iso_start", Track.START_S - 2.5, "iso"],
+		["iso_trees", tree_s, "iso"],
+		["iso_bridge_lower", sc - 2.0, "iso"],
+		["iso_bridge_upper", 1.0, "iso"],
+		["iso_hairpin", 120.0, "iso"],
+		["chase_straight", 14.0, "chase"],
+		["cine_hairpin", 118.0, "cine"],
+	]
+	var cine := CineCamera.new()
+	cine.target = car
+	world.add_child(cine)
+	var only_pose := ""
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--dtpose="):
+			only_pose = arg.trim_prefix("--dtpose=")
+	for p: Array in poses:
+		if only_pose != "" and p[0] != only_pose:
+			continue
+		await _place_on_track(p[1])
+		await _frames(20)
+		match p[2]:
+			"iso":
+				game.set_chase_view(false)
+				camera.snap_to_target()
+			"chase":
+				game.set_chase_view(true)
+			"cine":
+				var xf := track.pose_at(122.4, -5.0)
+				cine.anchor = xf.origin + Vector3.UP * 2.4
+				cine.current = true
+				cine.begin()
+				renderer.distance_fade = Vector2(cine.car_distance() + 10.0, cine.car_distance() + 30.0)
+		for m in Lighting.MODES.size():
+			l.set_mode_frozen(m)
+			await _frames(3)
+			await _shot("50_%s_%d_%s.png" % [p[0], m + 1, String(Lighting.MODES[m].name).replace(" ", "-")])
+			if OS.get_cmdline_user_args().has("--dtraw"):
+				await _shot("50_%s_%d_%s_raw.png" % [p[0], m + 1, String(Lighting.MODES[m].name).replace(" ", "-")], true)
+			if m == 2 and renderer.light_viewport != null and p[0] == "iso_trees":
+				renderer.light_viewport.get_texture().get_image().save_png(out_dir.path_join("51_%s_light_pass.png" % p[0]))
+		game.set_chase_view(false)
+	cine.queue_free()
+	l.sweep_running = true
+	l.set_mode(m0)
+	log_line("  shots 50_<pose>_<mode>.png for %d poses" % poses.size())
+
+
+
+## Lighting 4 (glint) through the hairpin in the chase view, against lighting 2
+## (same sun, no glint), for the highlight travelling over the car.
+func _test_glint() -> void:
+	log_line("\n[glint] chase view through the hairpin, lighting 2 vs 4")
+	var l: Lighting = game.lighting
+	var m0 := l.mode
+	game.set_chase_view(true)
+	var i := 0
+	for s in range(100, 150, 5):
+		await _place_on_track(float(s))
+		await _frames(30)
+		for m: int in [1, 3]:
+			l.set_mode(m)
+			await _frames(3)
+			await _shot("52_glint_%02d_%d.png" % [i, m + 1])
+			await _shot("52_glint_%02d_%d_raw.png" % [i, m + 1], true)
+		i += 1
+	game.set_chase_view(false)
+	l.set_mode(m0)
+
+
+
+
+## Lighting 5 (sweep): the sun at six points of its one-minute turn, iso over
+## the start line and chase, plus a short live run to check it moves.
+func _test_sweep() -> void:
+	log_line("\n[sweep] the moving sun")
+	var l: Lighting = game.lighting
+	var m0 := l.mode
+	await _place_on_track(Track.START_S - 2.5)
+	await _frames(20)
+	camera.snap_to_target()
+	for t in range(0, 60, 10):
+		l.set_mode_frozen(4, float(t))
+		await _frames(3)
+		await _shot("53_sweep_iso_%02ds.png" % t)
+	l.set_mode_frozen(4, 0.0)
+	l.sweep_running = true
+	var az0 := l.sun_az
+	await _frames(240)
+	log_line("  2 s live: sun az %.1f -> %.1f (expect +%.1f)" % [az0, l.sun_az, 2.0 * 360.0 / Lighting.SWEEP_PERIOD])
+	l.set_mode(m0)
+
+
+
+## Glyph stability per lighting mode: the grid-snap measurement (static view
+## round a tree, camera moved by a non-whole number of cells, cell buffers
+## compared at the shifted position), snapping on, for every mode.
+func _test_light_stability() -> void:
+	log_line("\n[light stability] static scene, two camera positions, per lighting mode (snap on)")
+	var l: Lighting = game.lighting
+	var m0 := l.mode
+	var snap_keep := camera.snap_to_grid
+	car.teleport(Transform3D(Basis.IDENTITY, Vector3(150.0, Track.ROAD_Y, 150.0)))
+	var keep_target := camera.target
+	camera.target = null
+	await _frames(30)
+	var tree_p := Vector3.ZERO
+	var best := INF
+	for prop in world.props.get_children():
+		if prop is StaticBody3D and prop.position.distance_to(track.bounds.get_center()) < best and prop.position.distance_to(track.point_at(Track.START_S)) > 4.0:
+			best = prop.position.distance_to(track.bounds.get_center())
+			tree_p = prop.position
+	camera.snap_to_grid = true
+	var moves: Array[Vector3] = [Vector3(1.37, 0.0, 0.83), Vector3(-2.11, 0.0, 0.57), Vector3(0.43, 0.0, -1.91)]
+	for m in Lighting.MODES.size():
+		l.set_mode_frozen(m)
+		var tot := [0, 0, 0, 0]
+		var tree_tot := [0, 0]
+		for mv in moves:
+			var a := Vector3(tree_p.x, 0.15, tree_p.z - 1.0)
+			var b := a + mv
+			camera.focus = a
+			camera._place()
+			await _settle()
+			var pa := camera.global_position
+			var ia := renderer.cell_viewport.get_texture().get_image()
+			var tree_c := _cell_of(Vector3(tree_p.x, 0.4, tree_p.z))
+			camera.focus = b
+			camera._place()
+			await _settle()
+			var pb := camera.global_position
+			var ib := renderer.cell_viewport.get_texture().get_image()
+			var cell := Vector2(float(renderer.pitch.x) / renderer.output_size.x * camera.size * renderer.scene_viewport.size.x / renderer.scene_viewport.size.y,
+				float(renderer.pitch.y) / renderer.output_size.y * camera.size)
+			var bas := camera.global_basis
+			var d := pb - pa
+			var si := Vector2i(roundi(d.dot(bas.x) / cell.x), roundi(-d.dot(bas.y) / cell.y))
+			var res := _compare(ia, ib, si, tree_c)
+			if OS.get_cmdline_user_args().has("--snapdump") and mv == moves[0]:
+				ia.save_png(out_dir.path_join("31_cells_m%d_a.png" % (m + 1)))
+				ib.save_png(out_dir.path_join("31_cells_m%d_b.png" % (m + 1)))
+				renderer.scene_viewport.get_texture().get_image().save_png(out_dir.path_join("31_scene_m%d_b.png" % (m + 1)))
+				log_line("    dump shift %s" % si)
+			for i in 4:
+				tot[i] += res[i]
+			tree_tot[0] += res[5]
+			tree_tot[1] += res[6]
+		_m["stability %s glyph diff" % l.mode_name()] = "%d / %d" % [tot[1], tot[0]]
+		log_line("  %-8s over %d moves: %d cells compared, glyph differs in %d (%.3f%%), ink in %d, background in %d; tree box %d/%d glyphs" % [
+			l.mode_name(), moves.size(), tot[0], tot[1], 100.0 * tot[1] / maxf(tot[0], 1), tot[2], tot[3], tree_tot[0], tree_tot[1]])
+	l.sweep_running = true
+	l.set_mode(m0)
+	camera.snap_to_grid = snap_keep
+	camera.target = keep_target
+
+
+
+## Frame rate per lighting mode, iso and chase, driving on the circuit (real
+## time, vsync off). Classic is measured again at the end, after hatching has
+## been on, to check that switching it off returns the cost.
+func _test_light_fps() -> void:
+	log_line("\n[light fps] frame rate per lighting mode (vsync off; window %s)" % get_window().size)
+	var l: Lighting = game.lighting
+	var m0 := l.mode
+	var order: Array[int] = [0, 1, 2, 3, 4, 0, 1, 0]
+	for chase: bool in [false, true]:
+		game.set_chase_view(chase)
+		var line := []
+		for m in order:
+			l.set_mode(m)
+			await _place_on_track(75.0, 0.0, 6.0)
+			var ap := _start_line(7.0)
+			await _frames(30)
+			var t0 := Time.get_ticks_usec()
+			for i in 600:
+				await RenderingServer.frame_post_draw
+			var fps := 600.0 / ((Time.get_ticks_usec() - t0) / 1e6)
+			_stop_line(ap)
+			line.append("%s %.0f" % [l.mode_name(), fps])
+		log_line("  %s: %s" % ["chase" if chase else "iso  ", ", ".join(line)])
+		_m["light fps " + ("chase" if chase else "iso")] = ", ".join(line)
+	game.set_chase_view(false)
+	l.set_mode(m0)
+	_inputs(0.0, 0.0, 1.0, false)
+	await _frames(30)
+
+
+
+## Classic after visiting every other mode (hatching, glint, the sweep) must be
+## the classic frame again, byte for byte (ASCII output and the raw scene).
+func _test_light_roundtrip() -> void:
+	log_line("\n[light roundtrip] classic, all modes, classic again")
+	var l: Lighting = game.lighting
+	_inputs(0.0, 0.0, 0.0, false)
+	car.teleport(world.grid_pose())
+	camera.snap_to_target()
+	await _frames(480)
+	# Hold the car still: earlier tests can leave it creeping.
+	car.freeze = true
+	await _frames(10)
+	l.set_mode(0)
+	await _settle()
+	var a := renderer.get_output_image()
+	var ar := renderer.scene_viewport.get_texture().get_image()
+	# Control: the same mode again after the same wait, no switching.
+	for m in [0, 0, 0, 0]:
+		l.set_mode(m)
+		await _settle()
+	var c := renderer.get_output_image()
+	log_line("  control (classic, no switch): ascii identical %s, raw identical %s" % [
+		a.get_data() == c.get_data(), ar.get_data() == renderer.scene_viewport.get_texture().get_image().get_data()])
+	for m in [1, 2, 3, 4]:
+		l.set_mode(m)
+		l.set_sun(l.sun_az + 33.0, l.sun_el + 5.0)
+		await _settle()
+	l.set_mode(0)
+	await _settle()
+	var b := renderer.get_output_image()
+	var br := renderer.scene_viewport.get_texture().get_image()
+	var same := a.get_data() == b.get_data()
+	var same_raw := ar.get_data() == br.get_data()
+	log_line("  classic before == after: ascii %s, raw scene %s" % [same, same_raw])
+	_m["classic roundtrip identical"] = same and same_raw
+	l.reset_sun()
+	l.set_mode(0)
+	car.freeze = false
+
+
+
+## Glint visibility over a full autopilot lap, iso and chase: the same lap is
+## driven in lighting 4 with its highlight off (Lighting.glint_highlight) and
+## on, and every 6th frame the car's screen box is cropped from the ASCII output
+## and the raw scene (54_<view>_<off|on>_<n>_{ascii,raw}.png, boxes in
+## 54_boxes.txt), for comparison offline: the difference is the highlight.
+## The car poses of the two laps are logged to check that the laps match.
+func _test_glint_lap() -> void:
+	log_line("\n[glint lap] one autopilot lap per view in lighting 2 and 4, car crops every 6th frame")
+	var l: Lighting = game.lighting
+	var m0 := l.mode
+	var boxes := FileAccess.open(out_dir.path_join("54_boxes.txt"), FileAccess.WRITE)
+	for chase: bool in [false, true]:
+		var view := "chase" if chase else "iso"
+		var poses := {}
+		for hl: bool in [false, true]:
+			var m := 3
+			var tag := "on" if hl else "off"
+			l.glint_highlight = hl
+			l.set_mode_frozen(m)
+			game.set_chase_view(chase)
+			await _place_on_track(Track.START_S, 0.0, 0.0)
+			await _frames(30)
+			var ap := Autopilot.new()
+			ap.car = car
+			ap.track = track
+			ap.max_speed = 7.0
+			add_child(ap)
+			var n := 0
+			var frames := 0
+			while frames < 120 * 22.5: # one lap (22.6 s measured)
+				await _frames(6)
+				frames += 6
+				var box := _car_box()
+				var out := renderer.get_output_image()
+				var raw := renderer.scene_viewport.get_texture().get_image()
+				var sc := Vector2(raw.get_size()) / Vector2(out.get_size())
+				out.get_region(box).save_png(out_dir.path_join("54_%s_%s_%03d_ascii.png" % [view, tag, n]))
+				raw.get_region(Rect2i(Vector2i(Vector2(box.position) * sc), Vector2i(Vector2(box.size) * sc))).save_png(
+					out_dir.path_join("54_%s_%s_%03d_raw.png" % [view, tag, n]))
+				if not hl:
+					poses[n] = car.global_position
+					boxes.store_line("%s %d %d %d %d %d %d" % [view, n, box.position.x, box.position.y, box.size.x, box.size.y, renderer.pitch.x * 1000 + renderer.pitch.y])
+				elif poses.has(n) and n % 50 == 0:
+					log_line("  %s sample %d: car pose differs from the lighting-2 lap by %.4f" % [view, n, car.global_position.distance_to(poses[n])])
+				n += 1
+			_stop_line(ap)
+			log_line("  %s highlight %s: %d samples over %.1f s" % [view, tag, n, frames / 120.0])
+	boxes.close()
+	l.glint_highlight = true
+	game.set_chase_view(false)
+	l.sweep_running = true
+	l.set_mode(m0)
+
+
+## The car's screen box in output pixels (its body box projected, padded a cell).
+func _car_box() -> Rect2i:
+	var xf := car.global_transform
+	var lo := Vector2(INF, INF)
+	var hi := -lo
+	for i in 8:
+		var c := Vector3(0.3 if i & 1 else -0.3, 0.5 if i & 2 else 0.0, 0.5 if i & 4 else -0.5)
+		var p := camera.get_viewport().get_camera_3d().unproject_position(xf * c) / Vector2(renderer.scene_viewport.size) * Vector2(renderer.output_size)
+		lo = lo.min(p)
+		hi = hi.max(p)
+	lo -= Vector2(renderer.pitch)
+	hi += Vector2(renderer.pitch)
+	var r := Rect2i(Vector2i(lo.floor()), Vector2i((hi - lo).ceil()))
+	return r.intersection(Rect2i(Vector2i.ZERO, renderer.output_size))
+
+
+
+## The circuit's corners: [name, s at the arc's start, s at its end, radius, turn
+## in degrees (+ = right)], from the resolved layout.
+func _corner_list() -> Array:
+	var out: Array = []
+	var s := 0.0
+	for seg: Array in track._segs:
+		var l: float = seg[1]
+		if seg[0] == "A":
+			var k: float = seg[2]
+			var deg := rad_to_deg(k * l)
+			out.append(["R%d %+.0f" % [roundi(1.0 / absf(k)), deg], s, s + l, 1.0 / absf(k), deg])
+		s += l
+	return out
+
+
+## One constant-speed pass through a corner with the centre-line autopilot (no
+## braking: it holds `v`). Returns [clean, max |lateral|, max slip deg, wheels
+## off the road (frames), spun].
+var _runup_max: float = INF
+## Measured clean speed per corner name (by _test_corners).
+var _corner_clean: Dictionary = {}
+## Limit scenarios: entry this much faster than the corner's clean speed.
+const OVERCOOK: float = 1.12
+## Clean pass: the car's centre stays this close to the centre line (its body on
+## the asphalt, not riding a kerb or a wall).
+const CORNER_CLEAN_LAT: float = 1.1
+
+
+func _corner_pass(c: Array, v: float) -> Array:
+	var runup := minf(2.0 + v * 0.6, _runup_max)
+	await _place_on_track(c[1] - runup, 0.0, v)
+	var ap := Autopilot.new()
+	ap.car = car
+	ap.track = track
+	ap.max_speed = v
+	ap.lateral_accel = 1000.0
+	add_child(ap)
+	var max_lat := 0.0
+	var max_slip := 0.0
+	var off := 0
+	var spun := false
+	var hint: float = c[1] - runup
+	for i in 120 * 8:
+		await _frames(1)
+		hint = track.progress(car.global_position, hint)
+		max_lat = maxf(max_lat, absf(track.lateral_offset(car.global_position, hint)))
+		max_slip = maxf(max_slip, absf(car.slip_angle))
+		if car.wheels_grounded > car.wheels_on_road:
+			off += 1
+		var t := track.tangent_at(hint)
+		if (-car.global_basis.z).dot(Vector3(t.x, 0.0, t.z).normalized()) < -0.5:
+			spun = true
+		if fposmod(hint - c[2], track.length) < track.length * 0.5 and fposmod(hint - c[2], track.length) > 2.0 or spun or max_lat > 4.0:
+			break
+	_stop_line(ap)
+	var clean := max_lat <= CORNER_CLEAN_LAT and off == 0 and max_slip < deg_to_rad(12.0) and not spun
+	return [clean, max_lat, rad_to_deg(max_slip), off, spun]
+
+
+## Highest clean constant-speed entry for each corner (bisection on speed),
+## against the car's top speed: which corners are flat, which need a lift or
+## braking.
+func _test_corners() -> void:
+	log_line("\n[corners] highest speed held through each corner by the centre-line autopilot (no braking) that stays clean: the body on the asphalt (|lateral| <= %.2f), no wheel off the road, slip < 12 deg" % CORNER_CLEAN_LAT)
+	var top := car.top_speed * 0.92
+	var rows := PackedStringArray()
+	var list := _corner_list()
+	for ci in list.size():
+		var c: Array = list[ci]
+		# Run up from the previous corner's exit at the latest.
+		var prev: Array = list[(ci - 1 + list.size()) % list.size()]
+		_runup_max = fposmod(c[1] - prev[2], track.length)
+		var lo := 2.0
+		var hi := top + 1.0
+		var at_hi: Array = await _corner_pass(c, hi)
+		var why := ""
+		if at_hi[0]:
+			lo = hi
+		else:
+			for it in 6:
+				var mid := (lo + hi) * 0.5
+				var r: Array = await _corner_pass(c, mid)
+				if r[0]:
+					lo = mid
+				else:
+					hi = mid
+					why = "lat %.2f slip %.0f off %d%s" % [r[1], r[2], r[3], " SPUN" if r[4] else ""]
+		var line := "%-8s s %5.1f..%5.1f  clean up to %5.2f u/s%s" % [c[0], c[1], c[2], lo, "  (flat)" if lo >= top else "   first failure above: " + why]
+		log_line("  " + line)
+		rows.append("%s %.1f" % [c[0], lo])
+		_corner_clean[c[0]] = lo
+	_m["corner_speeds"] = ", ".join(rows)
+
+
+## Steering toward the centre line ahead (pure pursuit), as a greedy driver aims.
+func _pursuit_steer(hint: float) -> float:
+	var v := maxf(car.forward_speed, 0.0)
+	var target := track.point_at(hint + 0.9 + 0.22 * v)
+	var to := target - car.global_position
+	to.y = 0.0
+	var fwd := -car.global_basis.z
+	fwd.y = 0.0
+	var err := fwd.signed_angle_to(to, Vector3.DOWN)
+	return clampf(err / maxf(car.steer_lock, deg_to_rad(4.0)) * 1.3, -1.0, 1.0)
+
+
+## The limit: the same overcooked entry into a corner with (a) no correction
+## (keeps aiming at the line, throttle held), (b) a human-like catch (after a
+## 0.2 s reaction delay once the slide passes 10 deg: counter-steer with the
+## slide and lift, then feed the throttle back in), (c) entering near the limit
+## on the throttle and lifting abruptly mid-corner (aiming at the line).
+func _test_limit() -> void:
+	log_line("\n[limit] overcooked entries (%.2fx the corner's clean speed): a = no correction (steering frozen once sliding, throttle held), b = catch after 0.2 s (counter-steer, lift, throttle back in), c = near-limit entry, lift abruptly 40%% into the corner; spun = nose more than 120 deg from the direction of travel" % OVERCOOK)
+	var corners := _corner_list()
+	var names := ["R6 +90", "R8 -45"]
+	for c: Array in corners:
+		if c[0] in names:
+			for mode in ["a", "b", "c"]:
+				await _limit_run(c, mode)
+
+
+func _limit_run(c: Array, mode: String) -> void:
+	# Entry speed: overcooked by 25% over this corner's clean speed (measured
+	# above when run with `corners`; otherwise from the radius and road grip).
+	var v_clean: float = _corner_clean.get(c[0], sqrt(car.grip_road * Car.G * 0.72 * c[3]))
+	var v := minf(v_clean * (1.0 if mode == "c" else OVERCOOK), car.top_speed * 0.92)
+	var s0: float = c[1] - 2.0 - v * 0.5
+	await _place_on_track(s0, 0.0, v)
+	var hint := s0
+	var peak := 0.0
+	var spun := false
+	var t_slide := -1.0
+	var t_catch := -1.0
+	var t_rec := -1.0
+	var heading0 := 0.0
+	var max_rel_yaw := 0.0
+	var lifted := false
+	var dur := 120 * 6
+	for i in dur:
+		hint = track.progress(car.global_position, hint)
+		var sl := car.slip_angle
+		var steer := _pursuit_steer(hint)
+		var thr := clampf((v - car.forward_speed) * 1.5 + 0.6, 0.0, 1.0)
+		var t := i / 120.0
+		var into := fposmod(hint - c[1], track.length)
+		into = into if into < track.length * 0.5 else into - track.length
+		match mode:
+			"a":
+				if t_slide < 0.0 and absf(sl) > deg_to_rad(10.0):
+					t_slide = t
+					heading0 = steer
+				if t_slide >= 0.0:
+					steer = heading0 # no reaction: the hands stay where they were
+			"b":
+				if t_slide < 0.0 and absf(sl) > deg_to_rad(10.0):
+					t_slide = t
+				if t_slide >= 0.0 and t >= t_slide + 0.2:
+					# Catch: steer with the slide (counter-steer), lift, then feed the throttle in.
+					# Counter-steer with the slide while it is big, back to aiming at
+					# the road as it shrinks; lift, then feed the throttle back in.
+					var since := t - t_slide - 0.2
+					var cs := clampf(sl / deg_to_rad(20.0), -1.0, 1.0)
+					steer = lerpf(steer, cs, clampf(absf(sl) / deg_to_rad(12.0), 0.0, 1.0))
+					thr = clampf((since - 0.25) * 1.5, 0.0, 0.7)
+					if t_catch < 0.0:
+						t_catch = t
+			"c":
+				thr = 1.0
+				if into > (c[2] - c[1]) * 0.4:
+					thr = 0.0
+					lifted = true
+		_inputs(steer, thr, 0.0, false)
+		await _frames(1)
+		var asl := absf(car.slip_angle)
+		peak = maxf(peak, asl)
+		var tg := track.tangent_at(hint)
+		var rel := absf((-car.global_basis.z).signed_angle_to(Vector3(tg.x, 0.0, tg.z), Vector3.UP))
+		max_rel_yaw = maxf(max_rel_yaw, rel)
+		var vel := car.linear_velocity
+		vel.y = 0.0
+		var nose := -car.global_basis.z
+		nose.y = 0.0
+		if vel.length() > 1.0 and nose.angle_to(vel) > deg_to_rad(120.0):
+			spun = true
+		if peak > deg_to_rad(10.0) and t_rec < 0.0 and asl < deg_to_rad(5.0) and absf(car.angular_velocity.y) < 1.5 and i > 30:
+			t_rec = t
+		if into > (c[2] - c[1]) + 6.0 or spun and i > 240:
+			break
+	var lat := track.lateral_offset(car.global_position, hint)
+	var line := "%s (%s) entry %.2f u/s: peak slip %.0f deg, max yaw vs road %.0f deg, %s; recovered (slip < 5) %s; ended %+.2f from the centre line (%s), %.2f u/s" % [
+		c[0], {"a": "a: no correction", "b": "b: catch after 0.2 s", "c": "c: lift mid-corner"}[mode], v, rad_to_deg(peak), rad_to_deg(max_rel_yaw),
+		"SPUN" if spun else "no spin", ("%.2f s after the slide began" % (t_rec - maxf(t_slide, 0.0))) if t_rec >= 0.0 and peak > deg_to_rad(10.0) else ("no slide" if peak <= deg_to_rad(10.0) else "NO"),
+		lat, "on road" if absf(lat) <= Track.ROAD_HALF_WIDTH + 0.3 else "OFF ROAD", car.forward_speed]
+	log_line("  " + line)
+	_m["limit %s %s" % [c[0], mode]] = "peak %.0f deg, %s, %s" % [rad_to_deg(peak), "SPUN" if spun else "no spin", "on road" if absf(lat) <= Track.ROAD_HALF_WIDTH + 0.3 else "off road"]
+	_inputs(0.0, 0.0, 1.0, false)
+	await _frames(60)
+
+
+
+## Nitro: inputs, the burn from top speed (speed over time, tank), the shove
+## from mid speed, feathering, refills, a burn mid-corner, and in the air.
+func _test_nitro() -> void:
+	log_line("\n[nitro] capacity %.2f s, push %.1f u/s^2, top speed +%d%%, ramp %.2f s, refill: drift %.2f tank/s, trickle %.0f s for a full tank" % [
+		car.nitro_capacity, car.nitro_accel, roundi(car.nitro_top_gain * 100.0), car.nitro_ramp_time, car.nitro_drift_refill, car.nitro_trickle_time])
+	# Inputs: Shift and the left stick click.
+	car.player_input = true
+	_key(KEY_SHIFT, true)
+	await _frames(2)
+	var by_key := car.nitro_input
+	_key(KEY_SHIFT, false)
+	await _frames(2)
+	_joy_button(JOY_BUTTON_LEFT_STICK, true)
+	await _frames(2)
+	var by_pad := car.nitro_input
+	_joy_button(JOY_BUTTON_LEFT_STICK, false)
+	await _frames(2)
+	var released := not car.nitro_input
+	car.player_input = false
+	log_line("  input: Shift -> %s, left stick click -> %s, released -> off %s" % [by_key, by_pad, released])
+	_m["nitro_input"] = "Shift %s, L-stick %s" % [by_key, by_pad]
+
+	# The burn from top speed on the pad.
+	await _place(Vector3(-9.5, 0.0, -30.0), Vector3.RIGHT, 9.8)
+	var v0 := car.forward_speed
+	car.refill_nitro()
+	var trace := PackedStringArray()
+	var peak := 0.0
+	var empty_at := -1.0
+	for i in 120 * 3:
+		_inputs(0.0, 1.0, 0.0, false)
+		car.nitro_input = i < 120 * 2 # held past empty: it stops by itself
+		await _frames(1)
+		peak = maxf(peak, car.forward_speed)
+		if empty_at < 0.0 and car.nitro_tank <= 0.0:
+			empty_at = (i + 1) / 120.0
+		if (i + 1) % 30 == 0:
+			trace.append("%.2f" % car.forward_speed)
+		if i == 90:
+			await _shot("60_nitro_burn.png")
+	car.nitro_input = false
+	log_line("  from %.2f u/s, throttle and nitro held: tank empty after %.2f s, peak %.2f u/s (+%d%%); speed every 0.25 s: %s" % [
+		v0, empty_at, peak, roundi((peak / v0 - 1.0) * 100.0), ", ".join(trace)])
+	_m["nitro_burn"] = "empty after %.2f s, %.2f -> peak %.2f u/s (+%d%%), back to %.2f after 2 s" % [empty_at, v0, peak, roundi((peak / v0 - 1.0) * 100.0), car.forward_speed]
+
+	# The shove: 0.5 s from 5 u/s, with and without.
+	var gain := []
+	for burn in [false, true]:
+		await _place(Vector3(-9.0, 0.0, -30.0), Vector3.RIGHT, 5.0)
+		car.refill_nitro()
+		for i in 60:
+			_inputs(0.0, 1.0, 0.0, false)
+			car.nitro_input = burn
+			await _frames(1)
+		gain.append(car.forward_speed - 5.0)
+	car.nitro_input = false
+	log_line("  0.5 s from 5 u/s, full throttle: +%.2f u/s without, +%.2f u/s with nitro" % [gain[0], gain[1]])
+	_m["nitro_shove"] = "+%.2f vs +%.2f u/s in 0.5 s from 5" % [gain[0], gain[1]]
+
+	# Feathering: three 0.1 s taps.
+	car.refill_nitro()
+	var t0 := car.nitro_tank
+	for k in 3:
+		car.nitro_input = true
+		await _frames(12)
+		car.nitro_input = false
+		await _frames(12)
+	log_line("  three 0.1 s taps used %.2f s of tank" % (t0 - car.nitro_tank - 0.0))
+
+	# Refill: trickle from empty for 5 s; drift for 2 s.
+	await _place(Vector3(-9.0, 0.0, -30.0), Vector3.RIGHT)
+	car.nitro_tank = 0.0
+	await _frames(600)
+	var trickle := car.nitro_tank / car.nitro_capacity
+	await _place(Vector3(-9.0, 0.0, -36.0), Vector3.RIGHT, 6.0)
+	car.nitro_tank = 0.0
+	var drift_t := 0.0
+	for i in 240:
+		_inputs(1.0 if i < 30 else 0.7, 1.0, 0.0, true)
+		await _frames(1)
+		if car.drift_state == Car.Drift.DRIFT:
+			drift_t += 1.0 / 120.0
+	_inputs(0.0, 0.0, 1.0, false)
+	await _frames(60)
+	log_line("  refill: trickle 5 s from empty -> %d%%; %.2f s of drifting (2.5 s total) -> %d%%" % [
+		roundi(trickle * 100.0), drift_t, roundi(car.nitro_tank / car.nitro_capacity * 100.0)])
+	_m["nitro_refill"] = "trickle 5 s %d%%, drift %.1f s %d%%" % [roundi(trickle * 100.0), drift_t, roundi(car.nitro_tank / car.nitro_capacity * 100.0)]
+	# Empty tank: no push.
+	await _place(Vector3(-9.0, 0.0, -30.0), Vector3.RIGHT, 5.0)
+	car.nitro_tank = 0.0
+	car.nitro_input = true
+	await _frames(30)
+	log_line("  empty tank, nitro held: level %.2f" % car.nitro_level)
+	car.nitro_input = false
+
+	# Mid-corner burn: R8 at its clean speed, nitro from the apex.
+	var c: Array = []
+	for cc: Array in _corner_list():
+		if cc[0] == "R8 -45":
+			c = cc
+			break
+	var vc: float = _corner_clean.get("R8 -45", 8.5)
+	for burn in [false, true]:
+		await _place_on_track(c[1] - 6.0, 0.0, vc)
+		car.refill_nitro()
+		var hint: float = c[1] - 6.0
+		var peak_slip := 0.0
+		var max_lat := 0.0
+		for i in 120 * 3:
+			hint = track.progress(car.global_position, hint)
+			var into: float = hint - c[1]
+			_inputs(_pursuit_steer(hint), clampf((vc - car.forward_speed) * 1.5 + 0.5, 0.0, 1.0), 0.0, false)
+			car.nitro_input = burn and into > (c[2] - c[1]) * 0.3
+			await _frames(1)
+			peak_slip = maxf(peak_slip, absf(car.slip_angle))
+			max_lat = maxf(max_lat, absf(track.lateral_offset(car.global_position, hint)))
+		car.nitro_input = false
+		log_line("  R8 -45 at %.2f u/s, nitro %s from 30%% in: peak slip %.0f deg, max |lateral| %.2f%s" % [
+			vc, "ON" if burn else "off", rad_to_deg(peak_slip), max_lat, " (off the road)" if max_lat > Track.ROAD_HALF_WIDTH else ""])
+		_m["nitro_corner_" + ("on" if burn else "off")] = "peak slip %.0f deg, lateral %.2f" % [rad_to_deg(peak_slip), max_lat]
+
+	# In the air: the jump at top speed, nitro from the kicker, vs without.
+	for burn in [false, true]:
+		await _place_on_track(16.0, 0.0, 9.5)
+		car.refill_nitro()
+		var take_off := Vector3.ZERO
+		var land := Vector3.ZERO
+		var yaw0 := 0.0
+		var airborne := false
+		var yaw_air := 0.0
+		var max_comp := 0.0
+		for i in 120 * 3:
+			var hint := track.progress(car.global_position, 16.0)
+			_inputs(_pursuit_steer(hint), 1.0, 0.0, false)
+			car.nitro_input = burn and hint > 19.5
+			await _frames(1)
+			if not airborne and car.wheels_grounded == 0 and hint > 20.5:
+				airborne = true
+				take_off = car.global_position
+				yaw0 = car.global_rotation.y
+			elif airborne and land == Vector3.ZERO and car.wheels_grounded > 0:
+				land = car.global_position
+				yaw_air = absf(wrapf(car.global_rotation.y - yaw0, -PI, PI))
+			if land != Vector3.ZERO:
+				max_comp = maxf(max_comp, car.suspension_compression())
+				if car.global_position.distance_to(land) > 3.0:
+					break
+		car.nitro_input = false
+		var dist := Vector2(take_off.x, take_off.z).distance_to(Vector2(land.x, land.z))
+		var land_s := track.progress(land, 28.0)
+		log_line("  jump at 9.5 u/s, nitro %s: flight %.2f u, lands at s %.1f (landing slope s 26..32.5), yaw in the air %.1f deg, max compression after landing %d%%" % [
+			"ON" if burn else "off", dist, land_s, rad_to_deg(yaw_air), roundi(max_comp * 100.0)])
+		_m["nitro_jump_" + ("on" if burn else "off")] = "flight %.2f u, lands s %.1f, compression %d%%" % [dist, land_s, roundi(max_comp * 100.0)]
+	_inputs(0.0, 0.0, 1.0, false)
+	await _frames(60)
+
+
+
+## The nitro bar and the burn, iso and chase, at the default glyph size and the
+## Retina 20 px one: burning, half full and refilling, empty with nitro held.
+func _test_nitro_shots() -> void:
+	log_line("\n[nitro shots] bar and burn effects")
+	var px0 := renderer.settings.glyph_px
+	for px: int in [px0, 20]:
+		if renderer.settings.glyph_px != px:
+			renderer.settings.glyph_px = px
+			await renderer.atlas_ready
+			await _frames(5)
+		for chase: bool in [false, true]:
+			game.set_chase_view(chase)
+			var view := "chase" if chase else "iso"
+			await _place_on_track(12.5, 0.0, 8.0)
+			car.refill_nitro()
+			await _frames(90) # let the empty-tank flash of the previous shot pass
+			for i in 50:
+				_inputs(_pursuit_steer(track.progress(car.global_position, 12.5)), 1.0, 0.0, false)
+				car.nitro_input = true
+				await _frames(1)
+			await _shot("61_nitro_%dpx_%s_burning.png" % [px, view])
+			car.nitro_input = false
+			car.nitro_tank = car.nitro_capacity * 0.5
+			await _frames(30)
+			await _shot("61_nitro_%dpx_%s_half.png" % [px, view])
+			car.nitro_tank = 0.0
+			car.nitro_input = true
+			await _frames(6)
+			await _shot("61_nitro_%dpx_%s_empty.png" % [px, view])
+			car.nitro_input = false
+	game.set_chase_view(false)
+	if renderer.settings.glyph_px != px0:
+		renderer.settings.glyph_px = px0
+		await renderer.atlas_ready
+	_inputs(0.0, 0.0, 1.0, false)
+	await _frames(30)
+
+
+
+## Audio measurement: scripted scenarios run under the movie writer
+## (`--write-movie <file>.avi`, which records the game's audio in step with the
+## frames). Logs per frame (60 fps movie time) the scenario and the car sound's
+## state to 70_audio_frames.csv, and the scenarios' frame ranges to
+## 70_audio_segments.csv, for tools/measure_audio.py.
+func _test_audio() -> void:
+	log_line("\n[audio] scenarios for the recording (see 70_audio_*.csv)")
+	var ca: CarAudio = game.car_audio
+	var au: AudioDirector = game.audio
+	var rows := PackedStringArray(["frame,scenario,rpm,gear,load,squeal,skid,nitro,speed,master_peak_db,music_peak_db,sfx_peak_db,w0,w1,w2,p0,p1,p2,events"])
+	var segs := PackedStringArray(["scenario,first_frame,last_frame"])
+	var state := {"scn": "", "frame": 0, "first": 0, "ev": 0}
+	var rec := func() -> void:
+		state.frame = Engine.get_process_frames() # = the movie writer's frame index
+		var w := ca.engine_weights
+		var pz := ca.engine_pitches
+		var ev := PackedStringArray()
+		while state.ev < ca.events.size():
+			var e: Array = ca.events[state.ev]
+			ev.append("%s:%.2f" % [e[1], e[2]])
+			state.ev += 1
+		rows.append("%d,%s,%.1f,%d,%.2f,%.3f,%.3f,%.2f,%.2f,%.1f,%.1f,%.1f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%s" % [state.frame, state.scn, ca.rpm, ca.gear, ca.load,
+			ca.squeal, ca.skid, car.nitro_level, car.linear_velocity.length(),
+			AudioServer.get_bus_peak_volume_left_db(0, 0), AudioServer.get_bus_peak_volume_left_db(AudioServer.get_bus_index("Music"), 0),
+			AudioServer.get_bus_peak_volume_left_db(AudioServer.get_bus_index("SFX"), 0),
+			w[0] if w.size() > 0 else 0.0, w[1] if w.size() > 1 else 0.0, w[2] if w.size() > 2 else 0.0,
+			pz[0] if pz.size() > 0 else 0.0, pz[1] if pz.size() > 1 else 0.0, pz[2] if pz.size() > 2 else 0.0, " ".join(ev)])
+	get_tree().process_frame.connect(rec)
+	var seg := func(name: String) -> void:
+		if state.scn != "":
+			segs.append("%s,%d,%d" % [state.scn, state.first, state.frame])
+		state.scn = name
+		state.first = state.frame + 1
+	ca.events.clear()
+	# Race: on the pad.
+	await _place(Vector3(-9.5, 0.0, -36.0), Vector3.RIGHT)
+	await _frames(60)
+	seg.call("idle")
+	await _frames(240)
+	seg.call("free_rev")
+	for i in 180:
+		_inputs(0.0, 1.0 if i < 90 else 0.0, 0.0, false)
+		car.linear_velocity = Vector3.ZERO
+		await _frames(1)
+	seg.call("launch_full_throttle")
+	for i in 120 * 4:
+		_inputs(0.0, 1.0, 0.0, false)
+		await _frames(1)
+	seg.call("coast")
+	_inputs(0.0, 0.0, 0.0, false)
+	await _frames(240)
+	seg.call("brake_stop")
+	_inputs(0.0, 0.0, 1.0, false)
+	await _frames(240)
+	_inputs(0.0, 0.0, 0.0, false)
+	# Sustained full throttle at speed (the reference for the level table).
+	await _place_on_track(12.5, 0.0, 9.0)
+	seg.call("full_throttle_cruise")
+	for i in 120 * 2:
+		_inputs(_pursuit_steer(track.progress(car.global_position, 12.5)), 1.0, 0.0, false)
+		await _frames(1)
+	# A corner too fast: squeal.
+	await _place_on_track(30.0, 0.0, 9.6)
+	seg.call("corner_squeal")
+	var h := 30.0
+	for i in 120 * 3:
+		h = track.progress(car.global_position, h)
+		_inputs(_pursuit_steer(h), 1.0, 0.0, false)
+		await _frames(1)
+	# Handbrake drift on the pad.
+	await _place(Vector3(-9.0, 0.0, -36.0), Vector3.RIGHT, 6.5)
+	seg.call("drift")
+	for i in 120 * 3:
+		_inputs(1.0 if i < 30 else 0.7, 1.0, 0.0, true)
+		await _frames(1)
+	_inputs(0.0, 0.0, 1.0, false)
+	await _frames(120)
+	# Nitro from mid speed.
+	await _place(Vector3(-9.5, 0.0, -30.0), Vector3.RIGHT, 6.0)
+	car.refill_nitro()
+	seg.call("nitro")
+	for i in 120 * 2:
+		_inputs(0.0, 1.0, 0.0, false)
+		car.nitro_input = i < 180
+		await _frames(1)
+	car.nitro_input = false
+	# Jump landing.
+	await _place_on_track(15.0, 0.0, 9.5)
+	seg.call("jump_landing")
+	h = 15.0
+	for i in 120 * 2:
+		h = track.progress(car.global_position, h)
+		_inputs(_pursuit_steer(h), 1.0, 0.0, false)
+		await _frames(1)
+	# Into the tree at the end of the pad.
+	await _place(Vector3(19.0, 0.0, -40.0), Vector3.RIGHT, 6.0)
+	seg.call("impact")
+	for i in 120 * 2:
+		_inputs(0.0, 0.5, 0.0, false)
+		await _frames(1)
+	# Everything at once: full throttle in a slide with nitro, landing on the jump.
+	await _place_on_track(14.0, 0.0, 9.5)
+	car.refill_nitro()
+	seg.call("everything")
+	h = 14.0
+	for i in 120 * 3:
+		h = track.progress(car.global_position, h)
+		_inputs(_pursuit_steer(h), 1.0, 0.0, i > 200)
+		car.nitro_input = i > 30
+		await _frames(1)
+	car.nitro_input = false
+	# Coasting at speed (music still audible?).
+	await _place_on_track(12.5, 0.0, 9.0)
+	seg.call("coast_at_speed")
+	for i in 120 * 2:
+		_inputs(_pursuit_steer(track.progress(car.global_position, 12.5)), 0.0, 0.0, false)
+		await _frames(1)
+	# Paused mid-drive.
+	await _place_on_track(12.5, 0.0, 8.0)
+	_inputs(0.0, 1.0, 0.0, false)
+	await _frames(60)
+	game.pause_menu.open(false)
+	seg.call("paused")
+	for i in 150:
+		await get_tree().process_frame
+	game.pause_menu.close()
+	seg.call("resumed")
+	await _frames(120)
+	# The reel's mix: menu music, the car under it.
+	au.forced_context = AudioDirector.Context.MENU
+	au.forced_track = "menu"
+	await _frames(240) # the crossfade
+	await _place_on_track(12.5, 0.0, 9.0)
+	seg.call("reel_mix")
+	for i in 120 * 3:
+		_inputs(_pursuit_steer(track.progress(car.global_position, 12.5)), 1.0, 0.0, false)
+		await _frames(1)
+	au.forced_context = -1
+	au.forced_track = ""
+	seg.call("")
+	_inputs(0.0, 0.0, 1.0, false)
+	get_tree().process_frame.disconnect(rec)
+	var f := FileAccess.open(out_dir.path_join("70_audio_frames.csv"), FileAccess.WRITE)
+	f.store_string("\n".join(rows) + "\n")
+	f.close()
+	f = FileAccess.open(out_dir.path_join("70_audio_segments.csv"), FileAccess.WRITE)
+	f.store_string("\n".join(segs) + "\n")
+	f.close()
+	log_line("  %d frames, %d segments, %d gear shifts" % [state.frame, segs.size() - 1, ca.shifts])
+
+
+
+## The pause menu: pausing mid-drive, in the air, mid-drift and mid-nitro
+## (nothing moves, no lap time, no rumble, the car silent; state and speed
+## carry over on resume), menu input, saved volumes, and screenshots at the
+## default grid, a small window's grid and the Retina 20 px grid.
+func _test_pause() -> void:
+	log_line("\n[pause] menu, pausing and resuming")
+	var menu: PauseMenu = game.pause_menu
+	var au: AudioDirector = game.audio
+	au.settings_path = out_dir.path_join("audio_settings.cfg")
+	var cases := [["driving", 30.0, 8.0, false, false], ["in the air", 17.0, 9.5, false, false],
+		["drifting", 113.0, 7.0, true, false], ["burning nitro", 12.5, 7.0, false, true]]
+	for c: Array in cases:
+		await _place_on_track(c[1], 0.0, c[2])
+		car.refill_nitro()
+		game.laps.reset()
+		var h: float = c[1]
+		var frames := 0
+		while frames < 600:
+			h = track.progress(car.global_position, h)
+			var steer := _pursuit_steer(h)
+			if c[3] and frames > 40:
+				steer = -1.0
+			_inputs(steer, 1.0, 0.0, c[3] and frames > 40)
+			car.nitro_input = c[4] and frames > 20
+			await _frames(1)
+			frames += 1
+			if c[0] == "in the air" and car.wheels_grounded == 0 and car.air_time > 0.1:
+				break
+			if c[3] and car.drift_state == Car.Drift.DRIFT and car.drift_time > 0.4:
+				break
+			if c[4] and car.nitro_level >= 1.0 and frames > 60:
+				break
+			if c[0] == "driving" and frames >= 60:
+				break
+		var p0 := car.global_position
+		var v0 := car.linear_velocity
+		var lap0: float = game.laps.current
+		var drift0 := car.drift_state
+		var nitro0 := car.nitro_level
+		var tank0 := car.nitro_tank
+		menu.open(false)
+		for i in 90:
+			await get_tree().process_frame
+		var moved := car.global_position.distance_to(p0)
+		var sfx_muted := AudioServer.is_bus_mute(AudioServer.get_bus_index("SFX"))
+		var rumble_off: bool = not game.rumble.running
+		var lap_d: float = game.laps.current - lap0
+		if c[0] == "driving":
+			await _shot("80_pause_menu_default.png")
+		menu.close()
+		await _frames(1)
+		var dv := (car.linear_velocity - v0).length()
+		log_line("  %-14s paused 1.5 s: moved %.4f, lap time +%.3f s, rumble off %s, car sound bus muted %s; resumed: speed change over one step %.2f u/s, drift %s -> %s, nitro level %.2f -> %.2f, tank %.2f -> %.2f" % [
+			c[0], moved, lap_d, rumble_off, sfx_muted, dv, Car.Drift.keys()[drift0], Car.Drift.keys()[car.drift_state], nitro0, car.nitro_level, tank0, car.nitro_tank])
+		_m["pause " + c[0]] = "moved %.4f, lap +%.3f, resume dv %.2f" % [moved, lap_d, dv]
+		car.nitro_input = false
+		_inputs(0.0, 0.0, 1.0, false)
+		await _frames(60)
+
+	# Menu input: open with Esc, down to MUSIC, left twice, Esc closes and saves.
+	game.controls.enabled = true
+	_key(KEY_ESCAPE, true)
+	_key(KEY_ESCAPE, false)
+	await get_tree().process_frame
+	var opened := menu.is_open and get_tree().paused
+	var m0 := au.music_volume
+	var target := menu.items.find(PauseMenu.Item.MUSIC)
+	for i in target:
+		_key(KEY_DOWN, true)
+		_key(KEY_DOWN, false)
+		await get_tree().process_frame
+	for i in 2:
+		_key(KEY_LEFT, true)
+		_key(KEY_LEFT, false)
+		await get_tree().process_frame
+	var m1 := au.music_volume
+	await get_tree().process_frame
+	_key(KEY_ESCAPE, true)
+	_key(KEY_ESCAPE, false)
+	await get_tree().process_frame
+	var closed := not menu.is_open and not get_tree().paused
+	var fresh := AudioDirector.new()
+	fresh.settings_path = au.settings_path
+	fresh.load_settings()
+	log_line("  keys: Esc opens %s (items %s); Down x%d, Left x2 on MUSIC: %.2f -> %.2f; Esc closes %s; saved to %s and read back: master %.2f music %.2f sfx %.2f" % [
+		opened, menu.items.map(func(it: int) -> String: return PauseMenu.LABELS[it]), target, m0, m1, closed, au.settings_path.get_file(),
+		fresh.master_volume, fresh.music_volume, fresh.sfx_volume])
+	_m["pause_menu_keys"] = "open %s, music %.2f -> %.2f, close %s, saved music %.2f" % [opened, m0, m1, closed, fresh.music_volume]
+	fresh.free()
+	au.set_music_volume(m0)
+	game.controls.enabled = false
+
+	# Screenshots at the three grid sizes (and the reel's version).
+	var px0 := renderer.settings.glyph_px
+	for g: Array in [["small_window", px0, Vector2i(800, 880)], ["retina_20px", 20, SHOT_SIZE], ["default", px0, SHOT_SIZE]]:
+		renderer.fixed_output_size = g[2]
+		if renderer.settings.glyph_px != g[1]:
+			renderer.settings.glyph_px = g[1]
+			await renderer.atlas_ready
+		await _frames(5)
+		menu.open(false)
+		menu.selected = menu.items.find(PauseMenu.Item.SFX)
+		for i in 10:
+			await get_tree().process_frame
+		await _shot("81_pause_menu_%s.png" % g[0])
+		menu.close()
+		await _frames(2)
+	renderer.fixed_output_size = SHOT_SIZE
+	menu.open(true)
+	for i in 10:
+		await get_tree().process_frame
+	await _shot("82_reel_menu_default.png")
+	menu.close()
+	await _frames(2)

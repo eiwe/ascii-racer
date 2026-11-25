@@ -28,12 +28,15 @@ const DRIFT_BLEND_TIME: float = 0.06
 const DRIFT_EXIT_BLEND_DEG: float = 10.0
 const DRIFT_EXIT_DONE_DEG: float = 2.0
 const DRIFT_EXIT_MAX_TIME: float = 0.7
+## Tank (seconds) needed to start a burn: holding the button on an empty tank
+## does not stutter on the trickle.
+const NITRO_MIN_START: float = 0.15
 
 @export_group("Chassis")
 ## Centre of mass height above the ground contact plane. Low = cannot roll over.
 @export_range(0.0, 0.3, 0.005) var com_height: float = 0.05
 ## Moments of inertia (pitch, yaw, roll) for mass 1; scaled by mass.
-@export var inertia_per_mass: Vector3 = Vector3(0.07, 0.09, 0.035)
+@export var inertia_per_mass: Vector3 = Vector3(0.07, 0.12, 0.035)
 
 @export_group("Suspension")
 @export_range(0.05, 0.3, 0.005) var wheel_radius: float = 0.125
@@ -57,19 +60,19 @@ const DRIFT_EXIT_MAX_TIME: float = 0.7
 
 @export_group("Engine and brakes")
 ## Speed at which the drive force reaches zero. Rolling drag makes the real top
-## speed on the road a little lower (8.5 here gives about 7.7).
-@export_range(1.0, 20.0, 0.1) var top_speed: float = 8.5
+## speed on the road a little lower (10.8 here gives about 9.9).
+@export_range(1.0, 20.0, 0.1) var top_speed: float = 10.8
 ## Acceleration from standstill (falls off as (1 - (v / top_speed)^2)).
-@export_range(0.5, 30.0, 0.1) var launch_accel: float = 8.5
+@export_range(0.5, 30.0, 0.1) var launch_accel: float = 10.0
 @export_range(0.5, 10.0, 0.1) var reverse_speed: float = 3.0
 @export_range(0.5, 30.0, 0.1) var reverse_accel: float = 5.0
 ## Deceleration asked of the brakes at full pedal (grip-limited).
-@export_range(1.0, 40.0, 0.5) var brake_decel: float = 11.0
+@export_range(1.0, 40.0, 0.5) var brake_decel: float = 12.0
 ## Share of brake force on the front axle.
 @export_range(0.0, 1.0, 0.05) var brake_front_bias: float = 0.6
 ## Rear-wheel deceleration with the throttle released (and no brake): shifts
 ## weight forward on lift-off, so lifting mid-corner tucks the nose in. 0 = coast.
-@export_range(0.0, 10.0, 0.25) var engine_braking: float = 0.0
+@export_range(0.0, 10.0, 0.25) var engine_braking: float = 2.5
 ## Constant rolling drag while coasting.
 @export_range(0.0, 5.0, 0.05) var rolling_decel: float = 0.8
 ## Extra speed-proportional drag per wheel off the road (1/s). Sets off-road top speed.
@@ -95,24 +98,33 @@ const DRIFT_EXIT_MAX_TIME: float = 0.7
 ## even though steering is reduced at speed. 0 = none. The player wins: when the
 ## input steers against the assist (into the slide), the assist fades out in
 ## proportion to the input, so full lock gives full lock.
-@export_range(0.0, 1.5, 0.05) var counter_steer_assist: float = 0.6
+@export_range(0.0, 1.5, 0.05) var counter_steer_assist: float = 0.35
+## Steering with a slide (counter-steering) may use more lock than the speed
+## allows otherwise: the lock opens toward max_steer_low_deg as the body slip
+## grows, reaching it at this slip angle, so a person can catch a big slide at
+## speed. 0 = off (the lock always follows the speed).
+@export_range(0.0, 60.0, 1.0) var countersteer_open_deg: float = 18.0
 
 @export_group("Tyres")
 ## Friction coefficient on the road.
-@export_range(0.1, 3.0, 0.05) var grip_road: float = 1.3
+@export_range(0.1, 3.0, 0.05) var grip_road: float = 1.0
 ## Friction coefficient off the road (on the ground).
-@export_range(0.1, 3.0, 0.05) var grip_ground: float = 0.75
-@export_range(0.1, 2.0, 0.05) var front_grip: float = 1.0
-@export_range(0.1, 2.0, 0.05) var rear_grip: float = 1.0
+@export_range(0.1, 3.0, 0.05) var grip_ground: float = 0.58
+@export_range(0.1, 2.0, 0.05) var front_grip: float = 1.03
+@export_range(0.1, 2.0, 0.05) var rear_grip: float = 0.95
+## Longitudinal grip (drive, brakes) as a multiple of the lateral grip: the
+## friction circle becomes an ellipse, so the car can brake and put power down
+## harder than it can corner.
+@export_range(0.5, 2.0, 0.05) var grip_long_ratio: float = 1.6
 ## Slip angle at which lateral grip peaks.
 @export_range(1.0, 30.0, 0.5) var peak_slip_deg: float = 7.0
 ## Lateral grip left when sliding well past the peak (fraction of peak).
-@export_range(0.1, 1.0, 0.05) var slide_grip: float = 0.8
+@export_range(0.1, 1.0, 0.05) var slide_grip: float = 0.85
 ## Fraction of the rear tyres' lateral grip lost at full throttle, scaled by the
 ## pedal and by the drive force left at this speed (like launch_accel): power
 ## oversteer that throttle can hold and lifting gives back. 0 = only the friction
 ## circle (drive force sharing the grip).
-@export_range(0.0, 0.8, 0.05) var power_oversteer: float = 0.0
+@export_range(0.0, 0.8, 0.05) var power_oversteer: float = 0.2
 ## Rear grip multiplier while the handbrake is held: always in the classic
 ## handbrake (drift_mode off); with drift_mode only for a low-speed pivot
 ## (handbrake + steering below drift_min_speed).
@@ -147,16 +159,35 @@ const DRIFT_EXIT_MAX_TIME: float = 0.7
 @export_range(0.0, 1.0, 0.05) var drift_carve_neutral: float = 0.45
 ## Sideways acceleration available in a drift, in g on the road (scaled by the
 ## surface's grip): how tight the arc can be at speed.
-@export_range(0.2, 3.0, 0.05) var drift_grip: float = 1.4
+@export_range(0.2, 3.0, 0.05) var drift_grip: float = 1.1
 ## Speed lost per second in a drift on full throttle (lifting adds rolling drag
 ## and engine braking, the brake pedal adds more).
 @export_range(0.0, 10.0, 0.1) var drift_speed_loss: float = 0.4
 ## Exit boost: forward acceleration (u/s^2) for drift_boost_time after a drift
 ## of at least DRIFT_BOOST_MIN_TIME, scaled by the charge (full after
 ## drift_boost_charge_time of drifting). 0 = no boost.
-@export_range(0.0, 20.0, 0.25) var drift_boost_accel: float = 3.0
+@export_range(0.0, 20.0, 0.25) var drift_boost_accel: float = 3.75
 @export_range(0.1, 3.0, 0.05) var drift_boost_time: float = 0.5
 @export_range(0.2, 5.0, 0.1) var drift_boost_charge_time: float = 1.5
+
+@export_group("Nitro")
+## A full tank: seconds of burn (held; tap to feather).
+@export_range(0.0, 5.0, 0.05) var nitro_capacity: float = 1.5
+## Extra drive while burning (u/s^2 at standstill), through the rear tyres on the
+## ground (so it can break them loose in a corner) and straight on the body in
+## the air. Falls off toward the raised top speed like the engine's drive.
+@export_range(0.0, 30.0, 0.5) var nitro_accel: float = 10.0
+## Top speed raised by this fraction while burning.
+@export_range(0.0, 1.0, 0.01) var nitro_top_gain: float = 0.25
+## Time for the push to build up and to die away (s).
+@export_range(0.01, 1.0, 0.01) var nitro_ramp_time: float = 0.2
+## Refill while drifting (handbrake drift held), as tank fractions per second.
+@export_range(0.0, 2.0, 0.05) var nitro_drift_refill: float = 0.35
+## Slow refill: seconds to fill an empty tank (0 = none). Neither refill runs while burning.
+@export_range(0.0, 120.0, 1.0) var nitro_trickle_time: float = 20.0
+## Above the normal top speed after a burn, extra drag per u/s of excess (1/s),
+## so the car settles back over a second or two.
+@export_range(0.0, 5.0, 0.05) var nitro_overspeed_drag: float = 1.2
 
 @export_group("Visual")
 ## Body roll per g of lateral acceleration (on top of the physical lean).
@@ -172,6 +203,9 @@ var steer_input: float = 0.0 ## -1 left .. 1 right
 var throttle_input: float = 0.0 ## 0..1
 var brake_input: float = 0.0 ## 0..1, reverses when (nearly) stopped
 var handbrake_input: bool = false
+var nitro_input: bool = false
+## False ignores nitro_input (e.g. the demo reel).
+var nitro_enabled: bool = true
 ## True when the steering comes from an analogue stick (no key smoothing): set
 ## by a deflected stick, cleared by a steering key.
 var steer_analog: bool = false
@@ -203,6 +237,13 @@ var _drift_w: float = 0.0 ## 0 = tyres, 1 = drift forces
 var _exit_time: float = 0.0
 var _hb_armed: bool = true ## the handbrake was up since the last drift ended
 var air_time: float = 0.0 ## seconds since a wheel last touched the ground
+var nitro_tank: float = 1.5 ## seconds of burn left
+var nitro_level: float = 0.0 ## 0..1 push being delivered (ramps in and out)
+## Seconds since the current burn started (0 when not burning), and how many
+## burns have started (for sound and effects: a change = ignition).
+var nitro_time: float = 0.0
+var nitro_ignitions: int = 0
+var _nitro_held: bool = false
 
 var _steer_state: float = 0.0
 var _mounts: Array[Vector3] = [] ## wheel attach points (top of travel), body local
@@ -290,6 +331,7 @@ func _read_player_input() -> void:
 		throttle_input = maxf(throttle_input, Input.get_action_strength(&"arrow_up"))
 		brake_input = maxf(brake_input, Input.get_action_strength(&"arrow_down"))
 	handbrake_input = Input.is_action_pressed(&"handbrake")
+	nitro_input = Input.is_action_pressed(&"nitro")
 
 
 func _physics_process(delta: float) -> void:
@@ -315,6 +357,8 @@ func _physics_process(delta: float) -> void:
 
 	_update_steering(delta)
 	_update_drift_state(delta)
+	_update_nitro(delta)
+	var top_eff := boosted_top_speed()
 
 	var corner_mass := mass * 0.25
 	var k := corner_mass * pow(TAU * spring_hz, 2.0)
@@ -388,7 +432,7 @@ func _physics_process(delta: float) -> void:
 		if not front:
 			if throttle_input > 0.0:
 				if forward_speed > -0.5:
-					var r := clampf(forward_speed / top_speed, 0.0, 1.0)
+					var r := clampf(forward_speed / top_eff, 0.0, 1.0)
 					f_long += throttle_input * mass * 0.5 * launch_accel * (1.0 - r * r)
 				else:
 					braking += throttle_input * mass * brake_decel * (1.0 - brake_front_bias) * 0.5
@@ -401,6 +445,11 @@ func _physics_process(delta: float) -> void:
 				braking += mass * 0.5 * handbrake_decel * (DRIFT_PIVOT_BRAKE if pivot else 1.0)
 			if throttle_input <= 0.0 and brake_input <= 0.0 and forward_speed > 0.5:
 				braking += mass * 0.5 * engine_braking
+			if nitro_level > 0.0 and forward_speed > -0.5:
+				var rn := clampf(forward_speed / top_eff, 0.0, 1.0)
+				f_long += nitro_level * mass * 0.5 * nitro_accel * (1.0 - rn * rn)
+			if forward_speed > top_speed and nitro_level < 1.0:
+				braking += mass * 0.5 * nitro_overspeed_drag * (forward_speed - top_speed) * (1.0 - nitro_level)
 		if brake_input > 0.0 and forward_speed >= 0.5:
 			var bias := brake_front_bias if front else 1.0 - brake_front_bias
 			braking += brake_input * mass * brake_decel * bias * 0.5
@@ -410,15 +459,22 @@ func _physics_process(delta: float) -> void:
 		# Brakes and drag only ever bring the contact patch to rest, never reverse it.
 		f_long -= signf(v_long) * minf(braking, absf(v_long) * stop)
 
-		# Friction circle.
+		# Friction ellipse (a circle when grip_long_ratio is 1).
 		var f := Vector2(f_long, f_lat)
-		wheel_usage[i] = Vector2(f_long / maxf(grip, 1e-6), x).length()
-		if f.length() > grip:
-			f = f.normalized() * grip
+		var g_long := grip * grip_long_ratio
+		wheel_usage[i] = Vector2(f_long / maxf(g_long, 1e-6), x).length()
+		var use := Vector2(f_long / maxf(g_long, 1e-6), f_lat / maxf(grip, 1e-6)).length()
+		if use > 1.0:
+			f /= use
 		f *= 1.0 - _drift_w
 		apply_force(wf * f.x + ws * f.y, contact - xf.origin)
 
 	_apply_drift_forces(delta, up, fwd)
+	if wheels_grounded == 0 and nitro_level > 0.0:
+		# In the air the push goes straight on the body (no steering from it).
+		var rn := clampf(forward_speed / top_eff, 0.0, 1.0)
+		var flat := (fwd - Vector3.UP * fwd.dot(Vector3.UP)).normalized()
+		apply_central_force(flat * mass * nitro_accel * nitro_level * (1.0 - rn * rn))
 	air_time = 0.0 if wheels_grounded > 0 else air_time + delta
 	if wheels_grounded == 0:
 		_stabilise_in_air(up)
@@ -436,6 +492,8 @@ func _update_steering(delta: float) -> void:
 	_steer_state = move_toward(_steer_state, target, rate * delta)
 	var t := clampf(absf(forward_speed) / top_speed, 0.0, 1.0)
 	var lock := deg_to_rad(lerpf(max_steer_low_deg, max_steer_high_deg, t))
+	if countersteer_open_deg > 0.0 and forward_speed > 1.0 and _steer_state != 0.0 and signf(_steer_state) == signf(slip_angle):
+		lock = lerpf(lock, deg_to_rad(max_steer_low_deg), clampf(absf(slip_angle) / deg_to_rad(countersteer_open_deg), 0.0, 1.0))
 	steer_lock = lock
 	var angle := _steer_state * lock
 	if forward_speed > 1.0:
@@ -452,6 +510,41 @@ func _update_steering(delta: float) -> void:
 		var inside := clampf(steer_input * drift_dir, -1.0, 1.0)
 		angle = lerpf(angle, -drift_dir * drift_angle + drift_dir * inside * deg_to_rad(5.0), _drift_w)
 	steer_angle = clampf(angle, -deg_to_rad(max_steer_low_deg), deg_to_rad(max_steer_low_deg))
+
+
+## Top speed with the nitro's gain at its current level.
+func boosted_top_speed() -> float:
+	return top_speed * (1.0 + nitro_top_gain * nitro_level)
+
+
+## Nitro tank: burns while held (and not empty), refills from drifting and a
+## slow trickle when not burning; the push ramps in and out.
+func _update_nitro(delta: float) -> void:
+	var burn := nitro_enabled and nitro_input and nitro_tank > (0.0 if _nitro_held else NITRO_MIN_START)
+	if burn and not _nitro_held:
+		nitro_ignitions += 1
+		nitro_time = 0.0
+	_nitro_held = burn
+	nitro_level = move_toward(nitro_level, 1.0 if burn else 0.0, delta / nitro_ramp_time)
+	if burn:
+		nitro_tank = maxf(nitro_tank - delta, 0.0)
+		nitro_time += delta
+	else:
+		nitro_time = 0.0
+		var fill := 0.0
+		if drift_state == Drift.DRIFT:
+			fill += nitro_drift_refill * nitro_capacity
+		if nitro_trickle_time > 0.0:
+			fill += nitro_capacity / nitro_trickle_time
+		nitro_tank = minf(nitro_tank + fill * delta, nitro_capacity)
+
+
+## Fills the nitro tank (a new game).
+func refill_nitro() -> void:
+	nitro_tank = nitro_capacity
+	nitro_level = 0.0
+	nitro_time = 0.0
+	_nitro_held = false
 
 
 ## Starts, keeps and ends the handbrake drift (see the Drift export group).
@@ -595,6 +688,9 @@ func teleport(xf: Transform3D) -> void:
 	_drift_w = 0.0
 	boost_left = 0.0
 	boost_charge = 0.0
+	nitro_level = 0.0
+	nitro_time = 0.0
+	_nitro_held = false
 	reset_physics_interpolation()
 
 

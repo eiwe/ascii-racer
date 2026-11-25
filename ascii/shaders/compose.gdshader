@@ -1,6 +1,7 @@
 // Compose pass: for every output pixel, find the cells whose glyph boxes
-// cover it (up to 3x3 when squeezed), fetch their slot data and the glyph
-// atlas, and overprint them with per-channel max over the cell background.
+// cover it (up to 3x3 when squeezed), fetch their glyph and the glyph atlas,
+// and overprint them with per-channel max over the cell background. Cell data:
+// 2 texels per cell (x * 2 = glyph and ink, x * 2 + 1 = background).
 shader_type canvas_item;
 render_mode blend_disabled, unshaded;
 
@@ -29,22 +30,20 @@ void fragment() {
 			if (local.x < 0 || local.y < 0 || local.x >= box.x || local.y >= box.y) {
 				continue;
 			}
-			for (int s = 0; s < 2; s++) {
-				vec4 d = texelFetch(cell_tex, ivec2(c.x * 3 + s, c.y), 0);
-				int idx = int(d.a * 255.0 + 0.5);
-				if (idx == 0) {
-					continue;
-				}
-				ivec2 org = ivec2(idx % atlas_cols, idx / atlas_cols) * box;
-				float cov = texelFetch(atlas_tex, org + local, 0).r;
-				ink = max(ink, d.rgb * cov);
-				cov_max = max(cov_max, cov);
+			vec4 d = texelFetch(cell_tex, ivec2(c.x * 2, c.y), 0);
+			int idx = int(d.a * 255.0 + 0.5);
+			if (idx == 0) {
+				continue;
 			}
+			ivec2 org = ivec2(idx % atlas_cols, idx / atlas_cols) * box;
+			float cov = texelFetch(atlas_tex, org + local, 0).r;
+			ink = max(ink, d.rgb * cov);
+			cov_max = max(cov_max, cov);
 		}
 	}
 	vec3 bg = vec3(0.0);
 	if (base.x < grid.x && base.y < grid.y) {
-		bg = texelFetch(cell_tex, ivec2(base.x * 3 + 2, base.y), 0).rgb;
+		bg = texelFetch(cell_tex, ivec2(base.x * 2 + 1, base.y), 0).rgb;
 	}
 	COLOR = vec4(bg * (1.0 - cov_max) + ink, 1.0);
 }

@@ -24,6 +24,9 @@ extends Camera3D
 @export_range(20.0, 120.0, 0.5) var fov_fast: float = 68.0
 ## Extra distance at top speed.
 @export_range(0.0, 3.0, 0.05) var speed_pull_back: float = 0.6
+## Nitro: extra field of view (degrees) and pull-back at a full burn.
+@export_range(0.0, 30.0, 0.5) var nitro_fov_kick: float = 9.0
+@export_range(0.0, 2.0, 0.05) var nitro_pull_back: float = 0.35
 ## How quickly the camera turns to follow the car (1/s), and how much the
 ## direction of travel (vs where the car points) counts when moving forward.
 @export_range(0.5, 20.0, 0.1) var heading_rate: float = 4.0
@@ -96,7 +99,7 @@ func snap_to_target() -> void:
 
 func _want_distance() -> float:
 	var t := clampf(target.linear_velocity.length() / maxf(target.top_speed, 0.1), 0.0, 1.0)
-	return distance * distance_scale + speed_pull_back * t
+	return distance * distance_scale + speed_pull_back * t + nitro_pull_back * target.nitro_level
 
 
 func _process(delta: float) -> void:
@@ -134,7 +137,7 @@ func _process(delta: float) -> void:
 			orbit_pitch = lerpf(orbit_pitch, 0.0, k)
 
 	var t := clampf(target.linear_velocity.length() / maxf(target.top_speed, 0.1), 0.0, 1.0)
-	fov = lerpf(fov_slow, fov_fast, t)
+	fov = lerpf(fov_slow, fov_fast, t) + nitro_fov_kick * target.nitro_level
 	_place(delta)
 
 

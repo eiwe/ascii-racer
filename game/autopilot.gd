@@ -4,7 +4,7 @@
 class_name Autopilot
 extends Node
 
-@export var lateral_accel: float = 9.0 ## cornering limit it plans for (u/s^2)
+@export var lateral_accel: float = 9.0 ## cornering limit it plans for (u/s^2), for road grip 1.3
 @export var brake_accel: float = 7.0 ## braking it plans for (u/s^2)
 @export var max_speed: float = 20.0
 @export var line_offset: float = 0.0 ## drive this far right of the centre line
@@ -50,11 +50,13 @@ func _physics_process(_delta: float) -> void:
 	car.steer_input = clampf(err / lock * 1.3, -1.0, 1.0)
 
 	var want := max_speed
+	# Planned grip relative to the original car's (road grip 1.3), like DemoDriver.
+	var grip := car.grip_road / 1.3 * minf(car.front_grip, car.rear_grip)
 	var d := 0.0
 	while d < 10.0:
 		var k := track.max_curvature(progress + d, 0.5)
 		if k > 0.0:
-			var vc := sqrt(lateral_accel / k)
+			var vc := sqrt(lateral_accel * grip / k)
 			want = minf(want, sqrt(vc * vc + 2.0 * brake_accel * d))
 		d += 0.5
 	car.throttle_input = clampf((want - v) * 2.0, 0.0, 1.0)

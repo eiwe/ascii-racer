@@ -6,7 +6,10 @@
 ##     nothing else (Q must not switch the camera, F1 must not open the panel,
 ##     A must not hold the handbrake)
 ##   - the game starts on the grid at rest, iso camera, HUD on, overlay off
-##   - Esc returns to the reel and the logo plays again
+##   - Esc opens the pause menu (game paused); its "to title" item returns to
+##     the reel and the logo plays again
+##   - in the reel, Esc and pad Start open the menu instead of starting a race,
+##     B / Esc close it back to the reel, and M (mute) does not start a race
 class_name AttractTest
 extends Node
 
@@ -115,13 +118,56 @@ func _run() -> void:
 			_key(KEY_W, false)
 		_key(KEY_ESCAPE, true)
 		_key(KEY_ESCAPE, false)
+		await _wait(0.3)
+		var menu: PauseMenu = game.pause_menu
+		var menu_open := menu.is_open and get_tree().paused
+		var items: Array = menu.items.map(func(it: int) -> String: return PauseMenu.LABELS[it])
+		if i == 0:
+			await _shot("03b_pause_menu.png")
+		# Up from the top wraps to QUIT, once more is TO TITLE; Enter chooses it.
+		for k in 2:
+			_key(KEY_UP, true)
+			_key(KEY_UP, false)
+			await _wait(0.05)
+		var chosen: String = PauseMenu.LABELS[menu.items[menu.selected]]
+		_key(KEY_ENTER, true)
+		_key(KEY_ENTER, false)
 		await _wait(0.6)
-		_line("  Esc: back to the reel %s, logo restarted (reel time %.2f s), %s" % [a.active, a._t, _state()])
+		_line("  Esc: menu open and paused %s %s; chose %s: back to the reel %s, logo restarted (reel time %.2f s), %s" % [menu_open, items, chosen, a.active, a._t, _state()])
 		if i == 0:
 			await _wait(1.0)
 			await _shot("04_reel_again.png")
 		await _wait(1.0)
+	# In the reel: Esc opens the menu (no race), Esc closes it; pad Start opens,
+	# B closes; M toggles the mute without starting a race.
+	var menu2: PauseMenu = game.pause_menu
+	_key(KEY_ESCAPE, true)
+	_key(KEY_ESCAPE, false)
+	await _wait(0.3)
+	var r1 := "Esc in the reel: menu %s %s, still in the reel %s" % [menu2.is_open, menu2.items.map(func(it: int) -> String: return PauseMenu.LABELS[it]), a.active]
+	await _shot("05_reel_menu.png")
+	_key(KEY_ESCAPE, true)
+	_key(KEY_ESCAPE, false)
+	await _wait(0.3)
+	r1 += "; Esc closes %s (paused %s, reel %s)" % [not menu2.is_open, get_tree().paused, a.active]
+	_button(JOY_BUTTON_START, true)
+	_button(JOY_BUTTON_START, false)
+	await _wait(0.3)
+	r1 += "; pad Start opens %s" % menu2.is_open
+	_button(JOY_BUTTON_B, true)
+	_button(JOY_BUTTON_B, false)
+	await _wait(0.3)
+	r1 += ", B closes %s, reel %s" % [not menu2.is_open, a.active]
+	var muted0: bool = game.audio.muted
+	_key(KEY_M, true)
+	_key(KEY_M, false)
+	await _wait(0.3)
+	r1 += "; M: muted %s -> %s, still in the reel %s" % [muted0, game.audio.muted, a.active]
+	_key(KEY_M, true)
+	_key(KEY_M, false)
+	await _wait(0.2)
+	_line(r1)
 	var f := FileAccess.open(out_dir.path_join("results.txt"), FileAccess.WRITE)
 	f.store_string("\n".join(_log) + "\n")
 	f.close()
-	get_tree().quit()
+	game.audio.quit()

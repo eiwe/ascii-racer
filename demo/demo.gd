@@ -36,9 +36,13 @@ func _ready() -> void:
 				push_warning("ignoring " + arg)
 	_controls = AsciiControls.new()
 	_controls.renderer = renderer
-	_controls.keys_text = "Space pause"
+	_controls.keys_text = "Space pause   " + Lighting.SUN_KEYS_HELP
 	add_child(_controls)
 	_controls.zoom_requested.connect(func(step: int) -> void: world.zoom_index += step)
+	world.lighting.renderer = renderer
+	_controls.mode_requested.connect(func(i: int) -> void: world.lighting.set_mode(i))
+	world.lighting.changed.connect(func() -> void: _controls.mode_text = world.lighting.describe())
+	_controls.mode_text = world.lighting.describe()
 	renderer.grid_changed.connect(_log_grid)
 	if _capture_dir != "":
 		_run_capture()
@@ -62,9 +66,9 @@ func _run_selftest() -> void:
 	get_window().size = Vector2i(1100, 700)
 	for i in 60:
 		await get_tree().process_frame
-	# Live changes: atlas rebuild (glyph size), squeeze, method.
+	# Live changes: atlas rebuild (glyph size), squeeze, lighting mode.
 	renderer.settings.glyph_px = 12
-	renderer.settings.method = AsciiSettings.Method.OVERSTRIKE
+	world.lighting.set_mode(2)
 	_controls.set_squeeze(0.8, 0.75)
 	await renderer.atlas_ready
 	for i in 30:
@@ -113,10 +117,12 @@ func _run_capture() -> void:
 		for sq in CAPTURE_SQUEEZES:
 			s.squeeze_x = sq
 			s.squeeze_y = sq
-			for m in AsciiSettings.METHOD_NAMES.size():
-				s.method = m as AsciiSettings.Method
+			for m in Lighting.MODES.size():
+				world.lighting.set_mode_frozen(m)
 				await _settle()
-				_save("%s_sq%03d_%d_%s.png" % [zname, roundi(sq * 100.0), m + 1, AsciiSettings.METHOD_NAMES[m]])
+				_save("%s_sq%03d_%d_%s.png" % [zname, roundi(sq * 100.0), m + 1, String(Lighting.MODES[m].name).replace(" ", "-")])
+			world.lighting.set_mode(0)
+			world.lighting.sweep_running = true
 	print("capture done: ", _capture_dir)
 	get_tree().quit()
 
@@ -158,3 +164,9 @@ func _save(file: String) -> void:
 	var path := _capture_dir.path_join(file)
 	var err := renderer.get_output_image().save_png(path)
 	print("captured ", path, " (", renderer.cols, "x", renderer.rows, ")" if err == OK else ") ERROR %d" % err)
+
+
+func _process(delta: float) -> void:
+	if _controls != null and _controls.enabled:
+		world.lighting.update_sun_keys(delta)
+		_controls.mode_text = world.lighting.describe()

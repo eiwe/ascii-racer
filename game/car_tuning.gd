@@ -15,16 +15,16 @@ const OVERRIDES: Dictionary = {
 	"balanced": {},
 	# Loose and playful: throttle and lift-off step the rear out (power_oversteer,
 	# engine_braking, a slightly higher CoM), slides keep most of their grip and
-	# the assist catches them. The handbrake drift holds the most angle and loses
-	# the least speed.
+	# the assist helps catch them. The handbrake drift holds the most angle and
+	# loses the least speed.
 	"drift": {
-		"power_oversteer": 0.6,
-		"engine_braking": 3.0,
+		"power_oversteer": 0.4,
+		"engine_braking": 3.5,
 		"com_height": 0.07,
-		"launch_accel": 10.0,
+		"launch_accel": 12.9,
 		"slide_grip": 0.9,
 		"peak_slip_deg": 8.0,
-		"counter_steer_assist": 0.9,
+		"counter_steer_assist": 0.6,
 		"max_steer_high_deg": 7.5,
 		"handbrake_rear_grip": 0.65,
 		"handbrake_decel": 2.0,
@@ -35,13 +35,16 @@ const OVERRIDES: Dictionary = {
 		"drift_carve": 0.6,
 		"drift_speed_loss": 0.3,
 	},
-	# Precise and planted: more grip at both ends with a sharp peak (grip falls
-	# away past it, so sliding is slow), quicker steering and yaw, stiff springs,
-	# little assist, strong brakes, less body motion. The handbrake drift is
-	# shallow, snaps in quickly and carves tight.
+	# Precise and planted: more grip at both ends (the rear a touch more) with a
+	# sharp peak (grip falls away past it, so sliding is slow), no power
+	# oversteer, quicker steering and yaw, stiff springs, little assist, strong
+	# brakes, less body motion. The handbrake drift is shallow, snaps in quickly
+	# and carves tight.
 	"grip": {
-		"front_grip": 1.15,
-		"rear_grip": 1.15,
+		"front_grip": 1.12,
+		"rear_grip": 1.14,
+		"power_oversteer": 0.0,
+		"engine_braking": 1.0,
 		"peak_slip_deg": 5.5,
 		"slide_grip": 0.7,
 		"counter_steer_assist": 0.15,
@@ -49,17 +52,17 @@ const OVERRIDES: Dictionary = {
 		"steer_return_speed": 14.0,
 		"stick_steer_speed": 60.0,
 		"max_steer_high_deg": 9.0,
-		"inertia_per_mass": Vector3(0.07, 0.075, 0.035),
+		"inertia_per_mass": Vector3(0.07, 0.10, 0.035),
 		"spring_hz": 4.0,
 		"damping_ratio": 0.8,
-		"brake_decel": 13.0,
+		"brake_decel": 14.0,
 		"handbrake_rear_grip": 0.5,
 		"drift_angle_deg": 18.0,
 		"drift_angle_steer_deg": 6.0,
 		"drift_angle_max_deg": 35.0,
 		"drift_rotate_rate": 11.0,
 		"drift_carve": 0.6,
-		"drift_grip": 1.5,
+		"drift_grip": 1.15,
 		"drift_speed_loss": 0.6,
 		"lean_deg_per_g": 4.0,
 		"pitch_deg_per_g": 2.0,
@@ -69,20 +72,20 @@ const OVERRIDES: Dictionary = {
 	# brakes, slow to accelerate but coasts further: wide lines, lift early. The
 	# handbrake drift needs more speed, swings in slowly and carves wider.
 	"heavy": {
-		"inertia_per_mass": Vector3(0.09, 0.12, 0.035),
+		"inertia_per_mass": Vector3(0.09, 0.15, 0.035),
 		"com_height": 0.08,
 		"steer_speed": 3.5,
 		"steer_return_speed": 5.0,
 		"stick_steer_speed": 10.0,
 		"max_steer_low_deg": 23.0,
 		"max_steer_high_deg": 6.0,
-		"top_speed": 9.0,
-		"launch_accel": 6.0,
-		"brake_decel": 7.5,
+		"top_speed": 11.4,
+		"launch_accel": 7.8,
+		"brake_decel": 8.2,
 		"rolling_decel": 0.5,
-		"grip_road": 1.2,
-		"slide_grip": 0.75,
-		"spring_hz": 2.2,
+		"grip_road": 0.92,
+		"slide_grip": 0.8,
+		"spring_hz": 2.6,
 		"damping_ratio": 0.45,
 		"lean_deg_per_g": 10.0,
 		"pitch_deg_per_g": 9.0,
@@ -91,7 +94,7 @@ const OVERRIDES: Dictionary = {
 		"drift_angle_deg": 22.0,
 		"drift_rotate_rate": 4.5,
 		"drift_carve": 0.45,
-		"drift_grip": 1.25,
+		"drift_grip": 0.96,
 		"drift_speed_loss": 0.5,
 	},
 }

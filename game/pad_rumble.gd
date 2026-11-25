@@ -19,6 +19,11 @@ extends Node
 @export_range(0.1, 10.0, 0.1) var impact_full_dv: float = 3.0
 @export_range(1.0, 30.0, 0.5) var impact_decay: float = 9.0
 
+## Nitro: a kick when it lights, then a steady buzz while it burns.
+const NITRO_KICK: float = 0.6
+const NITRO_WEAK: float = 0.35
+const NITRO_STRONG: float = 0.2
+
 var car: Car
 var enabled: bool = true
 ## Device being vibrated (last joypad that sent an event, or the first connected).
@@ -31,6 +36,7 @@ var stop_calls: int = 0
 var running: bool = false
 
 var _impact: float = 0.0
+var _ignitions: int = 0
 var _prev_v: Vector3 = Vector3.ZERO
 var _prev_p: Vector3 = Vector3.ZERO
 var _sent: Vector2 = Vector2(-1.0, -1.0)
@@ -76,6 +82,9 @@ func _physics_process(delta: float) -> void:
 	_prev_v = v
 	_prev_p = p
 	_impact = maxf(_impact * exp(-impact_decay * delta), clampf(dv / impact_full_dv, 0.0, 1.0))
+	if car.nitro_ignitions != _ignitions:
+		_ignitions = car.nitro_ignitions
+		_impact = maxf(_impact, NITRO_KICK) # the burn lights: a kick
 	var speed := v.length()
 	var slide := 0.0
 	var off := 0.0
@@ -85,9 +94,9 @@ func _physics_process(delta: float) -> void:
 			excess = maxf(excess, u - 1.0)
 		slide = clampf(excess / slide_full_excess, 0.0, 1.0) * clampf(speed / 2.0, 0.0, 1.0)
 		off = float(car.wheels_grounded - car.wheels_on_road) / 4.0 * clampf(speed / 3.0, 0.0, 1.0)
-	weak = clampf(slide * slide_weak + off * offroad_weak + _impact * 0.3, 0.0, 1.0) * strength
-	strong = clampf(off * offroad_strong + _impact, 0.0, 1.0) * strength
-	if not enabled or device < 0 or speed < 0.2 and _impact < 0.05 or weak + strong < 0.02:
+	weak = clampf(slide * slide_weak + off * offroad_weak + _impact * 0.3 + car.nitro_level * NITRO_WEAK, 0.0, 1.0) * strength
+	strong = clampf(off * offroad_strong + _impact + car.nitro_level * NITRO_STRONG, 0.0, 1.0) * strength
+	if not enabled or device < 0 or speed < 0.2 and _impact < 0.05 and car.nitro_level <= 0.0 or weak + strong < 0.02:
 		weak = 0.0
 		strong = 0.0
 		stop()

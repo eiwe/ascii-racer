@@ -6,17 +6,23 @@ Godot 4.7 project (Forward+, Jolt, GDScript with tabs and static types). `README
 
 - Run: `godot --path .` (main scene `game/game.tscn`). It opens on the demo reel; add `-- --play` to start on the grid. Renderer demo: `godot --path . res://demo/demo.tscn`.
 - `--headless` does not render. Anything that checks output needs a real window; make every run self-quitting and wrap it in `timeout`.
+- The game has sound and the owner hears every run. Pass `--audio-driver Dummy` (before `--path`) on any scripted run that does not need real audio output.
 - Handling changes: run the drive test and compare numbers before and after. `godot --path . --fixed-fps 120 -- --drivetest=<dir> [--preset=<name>] [--dtonly=a,b]`.
 - Demo reel changes (driver, shots, logo, start/return): `godot --path . -- --attracttest=<dir>` checks the flow with injected input; `godot --path . --fixed-fps 60 -- --attractshots=<dir>` saves frames to look at.
-- Renderer changes: run the demo capture and compare images. `godot --path . res://demo/demo.tscn -- --capture=<dir>`. Orthographic output is expected to stay byte-identical unless the change is meant to alter the look.
+- Renderer or lighting changes: run the demo capture and compare images. `godot --path . res://demo/demo.tscn -- --capture=<dir>`. Files are named `<zoom>_<squeeze>_<n>_<mode>.png`; lighting mode 1 (`*_1_classic.png`) must stay byte-identical unless the change is meant to alter the look.
+- Sound changes: the mix cannot be judged in a scripted run, so measure it. Record with `--dtonly=audio` under the movie writer and run `tools/measure_audio.py`; rebuild effect files only with `tools/prepare_audio.py`, and keep `assets/audio/CREDITS.md` in step with what ships.
 - Write test output to a scratch directory, never into the repo, and never write the real `user://car_tuning.cfg`.
 
 ## Things that have gone wrong before
 
 - A headless `godot --import` once re-imported `assets/kenney_toy-car-kit/Textures/colormap.png` as VRAM-compressed, which changed every model's colours. Its `.import` must stay lossless (`compress/mode=0`, `detect_3d/compress_to=0`). Check `git diff -- '*.import'` after any headless run.
-- The default look (`AsciiSettings` defaults, lighting, track colours) was chosen by the owner. Do not change it as a side effect of other work.
+- The default look (`AsciiSettings` defaults, lighting mode 1 "classic", track colours) was chosen by the owner. Do not change it as a side effect of other work.
 - Hiding scenery so the camera can see the car reads as a rendering bug. Brief occlusion is acceptable; for longer occlusion use the halo (`game/halo_occluder.gd`): give the occluding meshes the halo material and they get a round opening around the car.
 - `RenderingServer.global_shader_parameter_get()` is editor-only; calling it at runtime raises an error that aborts the calling function.
+- `Viewport.debug_draw = DEBUG_DRAW_LIGHTING` works from source but does nothing in an exported release build.
+- A camera's cull mask also culls lights and shadow casters, not just meshes.
+- Files that are not Godot resources (such as `assets/audio/sounds.cfg`) are left out of exports unless they are in the preset's include filter. The first audio export was silent for this reason.
+- Quit through the game's own paths (they stop all sound first). Godot's `--quit-after` can end the program mid-playback and print leak warnings; use the game's `-- --quitafter=<seconds>` instead.
 
 ## README media
 

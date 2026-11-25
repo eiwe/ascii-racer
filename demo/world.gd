@@ -32,6 +32,7 @@ var zoom_index: int = ZOOM_DEFAULT:
 
 var camera: Camera3D
 var car: Node3D
+var lighting: Lighting
 var _wheels: Array[Node3D] = []
 
 
@@ -41,6 +42,7 @@ func _ready() -> void:
 	_build_track()
 	_build_props()
 	car = _spawn("vehicle-racer", Vector3.ZERO, 0.0)
+	lighting.car = car
 	for w in ["wheel-fl", "wheel-fr", "wheel-bl", "wheel-br"]:
 		var n := car.find_child(w, true, false) as Node3D
 		if n != null:
@@ -102,28 +104,8 @@ func _tint(node: Node, tint: Color) -> void:
 
 
 func _build_environment() -> void:
-	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color.BLACK
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.55, 0.6, 0.75)
-	env.ambient_light_energy = 0.45
-	env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
-	env.tonemap_mode = Environment.TONE_MAPPER_LINEAR
-	var we := WorldEnvironment.new()
-	we.environment = env
-	add_child(we)
-
-	# Light from high up, a little from screen-left and toward the camera, so
-	# top / left / right faces of the blocky models get clearly different values.
-	var sun := DirectionalLight3D.new()
-	var from := Vector3(-0.45, 1.6, 0.9).normalized()
-	sun.basis = Basis.looking_at(-from, Vector3.UP)
-	sun.light_energy = 1.25
-	sun.shadow_enabled = true
-	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
-	sun.directional_shadow_max_distance = 40.0
-	add_child(sun)
+	lighting = Lighting.new()
+	lighting.build(self)
 
 
 func _build_ground() -> void:
@@ -136,6 +118,7 @@ func _build_ground() -> void:
 	ground.mesh = mesh
 	ground.material_override = mat
 	add_child(ground)
+	lighting.set_ground(ground)
 
 
 func _build_track() -> void:
@@ -147,6 +130,7 @@ func _build_track() -> void:
 		piece.transform = Transform3D(rot, rot * Vector3(TRACK_RADIUS, 1.0, 0.0))
 		# Darker than the kit's colours so the car is the brightest thing on screen.
 		_tint(piece, TRACK_TINT)
+		lighting.add_surfaces(piece)
 
 
 func _build_props() -> void:

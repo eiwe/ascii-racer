@@ -1,7 +1,7 @@
 ## Live tuning overlay on the right of the screen: the curated CarTuning.PANEL
 ## parameters with their values, a * where a value differs from the preset.
 ##
-## Pad: Start toggles; D-pad up/down selects, left/right adjusts (hold to
+## Pad: Back (Select) toggles; D-pad up/down selects, left/right adjusts (hold to
 ## repeat); X resets the selected value; LB/RB cycle presets and right-stick
 ## click saves (both also while closed). Keys: F1 toggles; arrows select/adjust
 ## while open (they drive again when closed); Backspace resets; F2/F3 presets;
@@ -17,7 +17,7 @@ const REPEAT_DELAY: float = 0.35
 const REPEAT_INTERVAL: float = 0.07
 const HELP: String = """D-pad/arrows select, adjust (hold)
 X/Bksp reset value  LB RB/F2 F3 preset
-RS click/F5 save    Start/F1 close"""
+RS click/F5 save    Back/F1 close"""
 
 var tuning: CarTuning
 var car: Car

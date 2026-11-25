@@ -1,9 +1,11 @@
 ## Game controller: driving HUD with telemetry, lap timer, car reset, handling
 ## presets and the tuning panel, pad rumble, the iso / chase camera switch (Q,
-## pad B), the G (grid snap) and V (rumble) keys, the see-through halo in the bridge,
+## pad B), lighting modes (keys 1-5, the sun on J L I K), the G (grid snap)
+## and V (rumble) keys, the see-through halo in the bridge,
 ## attract mode (the demo reel it opens on; Esc returns to it), and the
 ## `--drivetest=<dir>` scripted test mode.
 ##   --play                     start in the game, skipping the reel
+##   --lighting=<name|1-5>      start in this lighting mode
 ##   --preset=<name>            start with this handling preset
 ##   --tune=prop=value,...      then override single tunables (quick experiments)
 ##   --attractshots=<dir>       capture the reel (see Attract)
@@ -11,9 +13,11 @@
 extends Node
 
 const DRIVE_KEYS: String = """Keys  WASD drive (arrows too while tuning is closed)  Space handbrake
-      R reset  Q camera  G grid snap  V rumble  F1 tuning  F2 F3 preset  F5 save
-Pad   L-stick steer  RT throttle  LT brake  A handbrake  Y/Back reset  B camera
-      R-stick look (chase)  Start tuning  LB RB preset  R-stick click save"""
+      Shift nitro  R reset  Q camera  G grid snap  V rumble  F1 tuning  F2 F3 preset  F5 save
+      1-5 lighting  J L swing sun  I K raise / lower sun (lighting 2-5)
+      Esc menu  M mute
+Pad   L-stick steer  RT throttle  LT brake  A handbrake  L-stick click nitro  Y reset  B camera
+      R-stick look (chase)  Start menu  Back tuning  LB RB preset  R-stick click save"""
 ## How often the last on-track position is remembered for R.
 const SAFE_POSE_INTERVAL: float = 0.25
 const FLASH_TIME: float = 1.5
@@ -25,6 +29,7 @@ const RETINA_GLYPH_PX: int = 20
 @onready var world: Node3D = renderer.scene_viewport.get_node("World")
 
 var controls: AsciiControls
+var lighting: Lighting
 var laps: LapTimer
 var car: Car
 var track: Track
@@ -39,6 +44,10 @@ var chase_view: bool = false
 const CHASE_FADE: Vector2 = Vector2(12.0, 32.0)
 var chase_fade: bool = true
 var attract: Attract
+var nitro_hud: NitroHud
+var audio: AudioDirector
+var car_audio: CarAudio
+var pause_menu: PauseMenu
 
 var _safe_pose: Transform3D
 var _safe_timer: float = 0.0
@@ -72,6 +81,11 @@ func _ready() -> void:
 	controls.keys_text = DRIVE_KEYS
 	add_child(controls)
 	controls.zoom_requested.connect(_on_zoom)
+	lighting = world.lighting
+	lighting.renderer = renderer
+	controls.mode_requested.connect(func(i: int) -> void:
+		lighting.set_mode(i)
+		flash("lighting %d %s" % [i + 1, lighting.mode_name()]))
 	chase = world.chase
 	_halo_light = OmniLight3D.new()
 	_halo_light.name = "HaloLight"
@@ -96,9 +110,40 @@ func _ready() -> void:
 	Input.joy_connection_changed.connect(func(_d: int, _c: bool) -> void: _update_pad_text())
 	_update_pad_text()
 
+	# Paused (the menu): the renderer keeps drawing (the menu is in its overlay),
+	# the world under it stops.
+	renderer.process_mode = Node.PROCESS_MODE_ALWAYS
+	world.process_mode = Node.PROCESS_MODE_PAUSABLE
+	audio = AudioDirector.new()
+	audio.name = "Audio"
+	add_child(audio)
+	car_audio = CarAudio.new()
+	car_audio.name = "CarAudio"
+	car_audio.car = car
+	car_audio.table = audio.table
+	car_audio.director = audio
+	add_child(car_audio)
+	pause_menu = PauseMenu.new()
+	pause_menu.game = self
+	pause_menu.renderer = renderer
+	pause_menu.audio = audio
+	add_child(pause_menu)
+
+	nitro_hud = NitroHud.new()
+	nitro_hud.game = self
+	nitro_hud.car = car
+	nitro_hud.renderer = renderer
+	add_child(nitro_hud)
+
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--preset="):
 			tuning.select(arg.trim_prefix("--preset="))
+		elif arg.begins_with("--lighting="):
+			var li := Lighting.mode_index(arg.trim_prefix("--lighting="))
+			if li < 0:
+				push_warning("unknown lighting mode " + arg)
+			else:
+				lighting.set_mode(li)
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--tune="):
 			for kv in arg.trim_prefix("--tune=").split(",", false):
@@ -118,6 +163,7 @@ func _ready() -> void:
 		attract.game = self
 		add_child(attract)
 		attract.start(true)
+		nitro_hud.attract = attract
 		for arg in OS.get_cmdline_user_args():
 			if arg.begins_with("--attracttest="):
 				var at := AttractTest.new()
@@ -130,6 +176,8 @@ func _ready() -> void:
 func reset_to_grid() -> void:
 	_safe_pose = world.grid_pose()
 	car.teleport(_safe_pose)
+	car.refill_nitro()
+	car_audio.reset()
 	laps.reset()
 	camera.snap_to_target()
 	chase.snap_to_target()
@@ -218,6 +266,17 @@ func reset_car() -> void:
 
 
 func _process(delta: float) -> void:
+	# Music and mix: the menu track leads under the reel, the race track is a
+	# bed under the car in play (the pause menu sets its own context).
+	if attract != null and attract.busy():
+		audio.set_context(AudioDirector.Context.MENU)
+		audio.play_music("menu")
+	else:
+		audio.set_context(AudioDirector.Context.RACE)
+		audio.play_music("race")
+	controls.mode_text = lighting.describe()
+	if controls.enabled:
+		lighting.update_sun_keys(delta)
 	_update_halo(delta)
 	_flash_timer = maxf(_flash_timer - delta, 0.0)
 	var mods := tuning.modified_count()
@@ -256,11 +315,6 @@ func telemetry() -> String:
 func _unhandled_input(event: InputEvent) -> void:
 	if not controls.enabled:
 		return
-	var esc := event as InputEventKey
-	if attract != null and not attract.active and esc != null and esc.pressed and not esc.echo and esc.keycode == KEY_ESCAPE:
-		attract.start(false) # back to the demo reel
-		get_viewport().set_input_as_handled()
-		return
 	if event.is_action_pressed(&"camera_toggle"):
 		set_chase_view(not chase_view)
 		flash("chase view" if chase_view else "iso view")
@@ -276,4 +330,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if k.keycode == KEY_G:
 		camera.snap_to_grid = not camera.snap_to_grid
+		get_viewport().set_input_as_handled()
+	elif k.keycode == KEY_M:
+		flash("sound muted" if audio.toggle_mute() else "sound on")
+		audio.save_settings()
 		get_viewport().set_input_as_handled()

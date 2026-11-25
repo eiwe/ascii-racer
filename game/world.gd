@@ -12,6 +12,7 @@ var car: Car
 var camera: FollowCamera
 var chase: ChaseCamera
 var props: Node3D
+var lighting: Lighting
 
 
 
@@ -26,6 +27,9 @@ func _ready() -> void:
 	_build_props()
 	car = CAR_SCENE.instantiate() as Car
 	add_child(car)
+	lighting.set_ground(track.get_node("Ground") as GeometryInstance3D)
+	lighting.add_surfaces(track)
+	lighting.car = car
 	car.global_transform = grid_pose()
 	camera = FollowCamera.new()
 	camera.target = car
@@ -42,28 +46,10 @@ func grid_pose() -> Transform3D:
 	return track.pose_at(Track.START_S - GRID_BACK)
 
 
-# Same environment and sun as demo/world.gd (the look is fixed; keep in sync).
+# Environment and sun: see Lighting (shared with the demo scene).
 func _build_environment() -> void:
-	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color.BLACK
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.55, 0.6, 0.75)
-	env.ambient_light_energy = 0.45
-	env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
-	env.tonemap_mode = Environment.TONE_MAPPER_LINEAR
-	var we := WorldEnvironment.new()
-	we.environment = env
-	add_child(we)
-
-	var sun := DirectionalLight3D.new()
-	var from := Vector3(-0.45, 1.6, 0.9).normalized()
-	sun.basis = Basis.looking_at(-from, Vector3.UP)
-	sun.light_energy = 1.25
-	sun.shadow_enabled = true
-	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
-	sun.directional_shadow_max_distance = 40.0
-	add_child(sun)
+	lighting = Lighting.new()
+	lighting.build(self)
 
 
 func _model(file: String) -> Node3D:

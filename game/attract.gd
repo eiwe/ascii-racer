@@ -81,6 +81,8 @@ func _enter() -> void:
 	_player_preset = g.tuning.current
 	_player_values = g.tuning.capture()
 	g.tuning.select(REEL_PRESET)
+	g.car.nitro_enabled = false # the reel's driver does not use it
+	g.car.nitro_input = false
 	g.car.teleport(g.world.grid_pose())
 	g.laps.reset()
 	_overlay = g.renderer.get_overlay()
@@ -109,6 +111,11 @@ func _enter() -> void:
 	g.chase_view = false
 
 
+## True while the reel or a wipe owns the overlay (NitroHud leaves it alone).
+func busy() -> bool:
+	return active or _wipe >= 0.0
+
+
 ## Leaves the reel for the game: car on the grid at rest, iso camera, HUD on.
 func start_game() -> void:
 	if not active:
@@ -132,6 +139,7 @@ func _begin_play() -> void:
 	car.handbrake_input = false
 	g.car.apply_tuning(_player_values)
 	g.tuning.current = _player_preset
+	g.car.nitro_enabled = true
 	g.reset_to_grid()
 	g.set_chase_view(false)
 	g.controls.hud.visible = true
@@ -162,9 +170,14 @@ func _input(event: InputEvent) -> void:
 		return
 	var go := false
 	if event is InputEventKey:
-		go = event.pressed and not event.echo
+		# Esc opens the menu (PauseMenu), M mutes: neither starts a race.
+		go = event.pressed and not event.echo and event.keycode != KEY_ESCAPE and event.keycode != KEY_M
+		if event.pressed and not event.echo and event.keycode == KEY_M:
+			game.audio.toggle_mute()
+			game.audio.save_settings()
+			get_viewport().set_input_as_handled()
 	elif event is InputEventJoypadButton:
-		go = event.pressed
+		go = event.pressed and event.button_index != JOY_BUTTON_START
 	elif event is InputEventJoypadMotion:
 		var m := event as InputEventJoypadMotion
 		go = (m.axis == JOY_AXIS_TRIGGER_LEFT or m.axis == JOY_AXIS_TRIGGER_RIGHT) and m.axis_value > 0.5
@@ -247,4 +260,4 @@ func _capture() -> void:
 	var f := FileAccess.open(_capture_dir.path_join("frames.txt"), FileAccess.WRITE)
 	f.store_string("\n".join(log) + "\n")
 	f.close()
-	get_tree().quit()
+	game.audio.quit()

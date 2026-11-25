@@ -3,16 +3,7 @@
 class_name AsciiSettings
 extends Resource
 
-enum Method { RAMP, EDGES, SHAPE, OVERSTRIKE, HATCH }
 enum ColorMode { FULL, MONO }
-
-const METHOD_NAMES: PackedStringArray = ["ramp", "edges", "shape", "overstrike", "hatch"]
-
-@export_group("Method")
-@export var method: Method = Method.SHAPE:
-	set(v):
-		method = v
-		emit_changed()
 
 @export_group("Glyphs")
 ## Font used to build the glyph atlas. Null = bundled Hack Nerd Font Mono Bold.
@@ -85,27 +76,11 @@ const METHOD_NAMES: PackedStringArray = ["ramp", "edges", "shape", "overstrike",
 		emit_changed()
 
 @export_group("Ramp")
-## Fill ramp; sorted by measured glyph coverage at build time, so order does not matter.
+## Fill ramp for flat cells (see shape_flat_threshold); sorted by measured glyph
+## coverage at build time, so order does not matter.
 @export var ramp_chars: String = " .,:;-=+*o#%@":
 	set(v):
 		ramp_chars = v
-		emit_changed()
-
-@export_group("Edges")
-## Depth jump (world units, beyond what the surface slope explains) that counts as a silhouette.
-@export_range(0.0, 2.0, 0.005) var edge_depth_threshold: float = 0.06:
-	set(v):
-		edge_depth_threshold = v
-		emit_changed()
-## 1 - cos(angle) between neighbouring normals that counts as a crease.
-@export_range(0.0, 2.0, 0.005) var edge_normal_threshold: float = 0.6:
-	set(v):
-		edge_normal_threshold = v
-		emit_changed()
-## Ink multiplier for the edge glyph in OVERSTRIKE.
-@export_range(0.5, 3.0, 0.05) var overstrike_boost: float = 1.5:
-	set(v):
-		overstrike_boost = v
 		emit_changed()
 
 @export_group("Shape")
@@ -139,29 +114,3 @@ const METHOD_NAMES: PackedStringArray = ["ramp", "edges", "shape", "overstrike",
 	set(v):
 		shape_chars = v
 		emit_changed()
-
-@export_group("Hatch")
-## Per-orientation ramps, sparse to dense, used in that order.
-@export var hatch_top: String = " .-=#":
-	set(v):
-		hatch_top = v
-		emit_changed()
-## Faces whose horizontal edges run down-right on screen.
-@export var hatch_left: String = " .\\N#":
-	set(v):
-		hatch_left = v
-		emit_changed()
-## Faces whose horizontal edges run up-right on screen.
-@export var hatch_right: String = " ,/Z#":
-	set(v):
-		hatch_right = v
-		emit_changed()
-## Vertical faces seen roughly head-on.
-@export var hatch_front: String = " :|H#":
-	set(v):
-		hatch_front = v
-		emit_changed()
-
-
-func method_name() -> String:
-	return METHOD_NAMES[method]

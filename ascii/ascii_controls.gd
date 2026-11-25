@@ -1,18 +1,22 @@
 ## Render-setting keys and the HUD panel for an AsciiRenderer, shared by scenes.
 ##
-## Keys: 1-5 method, [ ] squeeze, ; ' vertical squeeze, - = glyph size,
+## Keys: 1-5 mode (emitted as `mode_requested`; the scene decides what a mode
+## is, e.g. lighting), [ ] squeeze, ; ' vertical squeeze, - = glyph size,
 ## , . zoom (emitted as `zoom_requested`, the scene owns its camera), C colour,
 ## B bg tint, Tab raw 3D, H hud, P screenshot. Scenes add their own lines to the
-## panel with `status_text` (above the settings) and `keys_text` (below).
+## panel with `status_text` (above the settings) and `keys_text` (below), and
+## name the current mode with `mode_text`.
 class_name AsciiControls
 extends Node
 
 signal zoom_requested(step: int)
+## Keys 1-5: index 0..4.
+signal mode_requested(index: int)
 
 const SQUEEZE_STEP: float = 0.05
 const BG_LEVELS: Array[float] = [0.0, 0.15, 0.3]
 const HUD_FONT: Font = preload("res://assets/fonts/HackNerdFontMono-Regular.ttf")
-const KEYS_HELP: String = """1-5 method   [ ] squeeze   ; ' v-squeeze
+const KEYS_HELP: String = """1-5 mode   [ ] squeeze   ; ' v-squeeze
 - = glyph size   , . zoom   C colour   B bg tint
 Tab raw 3D   H hud   P screenshot"""
 
@@ -23,6 +27,8 @@ Tab raw 3D   H hud   P screenshot"""
 var status_text: String = ""
 ## Scene-specific key help shown at the bottom of the panel.
 var keys_text: String = ""
+## Name of the scene's current mode (keys 1-5), shown at the top of the settings.
+var mode_text: String = ""
 
 var hud: CanvasLayer
 var _label: Label
@@ -64,7 +70,7 @@ func _process(_delta: float) -> void:
 	var s := renderer.settings
 	var cam := renderer.scene_viewport.get_camera_3d()
 	var text := "%s%s   %d fps\nglyph %dpx (%dx%d)  pitch %dx%d  squeeze %.2f x %.2f\ngrid %d x %d   zoom %.1f   colour %s   bg %.2f\n%s" % [
-		s.method_name(), "  [RAW 3D]" if renderer.raw_view else "", Engine.get_frames_per_second(),
+		mode_text, "  [RAW 3D]" if renderer.raw_view else "", Engine.get_frames_per_second(),
 		s.glyph_px, renderer.glyph_box.x, renderer.glyph_box.y, renderer.pitch.x, renderer.pitch.y,
 		s.squeeze_x, s.squeeze_y, renderer.cols, renderer.rows, cam.size if cam != null else 0.0,
 		"full" if s.color_mode == AsciiSettings.ColorMode.FULL else "mono", s.bg_strength, KEYS_HELP]
@@ -82,7 +88,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	var s := renderer.settings
 	match k.keycode:
 		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5:
-			s.method = (k.keycode - KEY_1) as AsciiSettings.Method
+			mode_requested.emit(k.keycode - KEY_1)
 		KEY_BRACKETLEFT:
 			set_squeeze(s.squeeze_x - SQUEEZE_STEP, s.squeeze_y - SQUEEZE_STEP)
 		KEY_BRACKETRIGHT:
@@ -128,7 +134,7 @@ func screenshot() -> void:
 	DirAccess.make_dir_recursive_absolute(dir)
 	var s := renderer.settings
 	var file := "%s/%s_%s_sq%03d.png" % [dir, Time.get_datetime_string_from_system().replace(":", "-"),
-		"raw" if renderer.raw_view else s.method_name(), roundi(s.squeeze_x * 100.0)]
+		"raw" if renderer.raw_view else mode_text.validate_filename(), roundi(s.squeeze_x * 100.0)]
 	await RenderingServer.frame_post_draw
 	renderer.get_output_image().save_png(file)
 	print("saved ", ProjectSettings.globalize_path(file))

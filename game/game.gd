@@ -1,11 +1,13 @@
 ## Game controller: driving HUD with telemetry, lap timer, car reset, handling
 ## presets and the tuning panel, pad rumble, the iso / chase camera switch (Q,
-## pad B), lighting modes (keys 1-7, the sun on J L I K), the G (grid snap)
+## pad B), lighting modes (keys 1-9, the sun on J L I K), the G (grid snap)
 ## and V (rumble) keys, the see-through halo in the bridge,
 ## attract mode (the demo reel it opens on; Esc returns to it), and the
 ## `--drivetest=<dir>` scripted test mode.
 ##   --play                     start in the game, skipping the reel
-##   --lighting=<name|1-7>      start in this lighting mode (default 1 sunset)
+##   --lighting=<name|1-9>      start in this lighting mode (default 1 sunset)
+##   --track=<id>               start on this track (with --play; default: the saved one)
+##   --time=<morning|noon|night>   its time of day (with --play; default: the track's saved one)
 ##   --preset=<name>            start with this handling preset
 ##   --tune=prop=value,...      then override single tunables (quick experiments)
 ##   --attractshots=<dir>       capture the reel (see Attract)
@@ -14,7 +16,7 @@ extends Node
 
 const DRIVE_KEYS: String = """Keys  WASD drive (arrows too while tuning is closed)  Space handbrake
       Shift nitro  R reset  Q camera  G grid snap  V rumble  F1 tuning  F2 F3 preset  F5 save
-      1-7 lighting  J L swing sun  I K raise / lower sun (moon at night; not in classic)
+      1-9 lighting  J L swing sun  I K raise / lower sun (moon at night; not in classic)
       Esc menu  M mute
 Pad   L-stick steer  RT throttle  LT brake  A handbrake  L-stick click nitro  Y reset  B camera
       R-stick look (chase)  Start menu  Back tuning  LB RB preset  R-stick click save"""
@@ -24,9 +26,11 @@ const FLASH_TIME: float = 1.5
 ## Default glyph size on a Retina Mac (the normal default is AsciiSettings.glyph_px).
 const RETINA_GLYPH_PX: int = 20
 ## Web build: default glyph size at a device pixel ratio of 2 (the page is drawn
-## in device pixels); between 1 and 2 it is interpolated from the normal default,
+## in device pixels); between 1 and 2 it is interpolated from WEB_GLYPH_PX,
 ## above 2 it grows in proportion.
 const WEB_HIDPI_GLYPH_PX: int = 16
+## Web build: default glyph size at a device pixel ratio of 1 (desktop: 9).
+const WEB_GLYPH_PX: int = 12
 
 @onready var renderer: AsciiRenderer = $AsciiRenderer
 # The renderer moves its children into its SceneViewport during its own _ready.
@@ -60,6 +64,10 @@ var countdown_enabled: bool = true
 ## Web only, until the first key or click: the start screen that lets the
 ## browser switch on sound before the reel (see WebStart).
 var web_start: WebStart
+## Between the reel and a race (see LevelSelect).
+var level_select: LevelSelect
+## The eased move between the iso and chase views (see ViewBlend).
+var view_blend: ViewBlend
 
 var _safe_pose: Transform3D
 var _safe_timer: float = 0.0
@@ -82,6 +90,7 @@ func _ready() -> void:
 	camera.renderer = renderer
 	camera.snap_to_target()
 	laps = LapTimer.new(track)
+	laps.lap_completed.connect(_on_lap)
 	_safe_pose = world.grid_pose()
 
 	# On a Retina Mac the default 9 px glyphs are too small to read as characters.
@@ -102,6 +111,12 @@ func _ready() -> void:
 		lighting.set_mode(i)
 		flash("lighting %d %s" % [i + 1, lighting.mode_name()]))
 	chase = world.chase
+	view_blend = ViewBlend.new()
+	view_blend.name = "ViewBlend"
+	view_blend.iso = camera
+	view_blend.chase = chase
+	world.add_child(view_blend)
+	view_blend.finished.connect(func(on: bool) -> void: set_chase_view(on))
 	_halo_light = OmniLight3D.new()
 	_halo_light.name = "HaloLight"
 	_halo_light.shadow_enabled = false
@@ -155,6 +170,11 @@ func _ready() -> void:
 		controls.legend_allowed = false
 		controls.legend.visible = false)
 
+	level_select = LevelSelect.new()
+	level_select.name = "LevelSelect"
+	level_select.game = self
+	add_child(level_select)
+
 	race_start = RaceStart.new()
 	race_start.name = "RaceStart"
 	race_start.game = self
@@ -190,6 +210,18 @@ func _ready() -> void:
 			add_child(test)
 			scripted = true
 	if not scripted and OS.get_cmdline_user_args().has("--play"):
+		# The saved track and its time of day (or --track= / --time=).
+		var tid := audio.track_id
+		var tod := ""
+		for arg in OS.get_cmdline_user_args():
+			if arg.begins_with("--track="):
+				tid = arg.trim_prefix("--track=")
+			elif arg.begins_with("--time="):
+				tod = arg.trim_prefix("--time=")
+		audio.select_track(Tracks.get_def(tid).id)
+		set_track(audio.track_id)
+		if not _lighting_arg():
+			apply_time_of_day(tod if tod != "" else audio.track_time(audio.track_id))
 		race_start.tip_pending = true # the camera tip before the first lights
 		reset_to_grid() # the start lights
 		update_opponent(true)
@@ -215,6 +247,44 @@ func _ready() -> void:
 				at.game = self
 				at.out_dir = arg.trim_prefix("--attracttest=")
 				add_child(at)
+
+
+## Switches the world to track `id` (a Tracks id): the circuit and its scenery
+## are rebuilt, the lap timer, the opponent and the safe pose follow. The car
+## is not moved (reset_to_grid() does that).
+func set_track(id: String) -> void:
+	var def := Tracks.get_def(id)
+	var had_opponent := opponent != null
+	if had_opponent:
+		remove_opponent()
+	if not world.load_track(def):
+		if had_opponent:
+			update_opponent(false)
+		return
+	track = world.track
+	laps = LapTimer.new(track)
+	laps.lap_completed.connect(_on_lap)
+	_safe_pose = world.grid_pose()
+	if renderer.shadow_hatch:
+		renderer._apply_shadow_hatch() # light twins for the new meshes
+
+
+## Lights the world for a time of day ("morning", "noon", "night").
+func apply_time_of_day(t: String) -> void:
+	lighting.set_mode(Lighting.TIME_MODES.get(t, Lighting.TIME_MODES[AudioDirector.DEFAULT_TIME]))
+
+
+func _lighting_arg() -> bool:
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--lighting="):
+			return true
+	return false
+
+
+## A lap was completed: kept as the track's best if it is.
+func _on_lap(t: float) -> void:
+	if audio.record_lap(world.track_def.id, t):
+		flash("best lap %s" % LapTimer.fmt(t))
 
 
 ## Puts the car on the grid at rest with the lap timer reset (start of a game).
@@ -270,14 +340,25 @@ func _on_zoom(step: int) -> void:
 ## Switches between the isometric and the chase camera. The iso camera keeps
 ## following in the background, so switching back restores its framing (zoom,
 ## snapping, look-ahead) exactly as it would have been.
+## Switches views at once (scripted runs, the reel); the player's camera key
+## blends instead (blend_view).
 func set_chase_view(on: bool) -> void:
 	chase_view = on
+	if view_blend.active:
+		view_blend.cancel()
+	lighting.fog_offset = 0.0
 	if on:
 		chase.current = true
 		chase.snap_to_target()
 	else:
 		camera.current = true
 	renderer.distance_fade = CHASE_FADE if on and chase_fade else Vector2.ZERO
+
+
+## The player's view switch: an eased move (ViewBlend); pressing again mid-move reverses it.
+func blend_view(on: bool) -> void:
+	chase_view = on
+	view_blend.start(on)
 
 
 func _update_pad_text(pads: Array[int] = Input.get_connected_joypads()) -> void:
@@ -303,8 +384,16 @@ const HALO_LIGHT_FADE: float = 5.0 ## per second
 ## in view by themselves (line of sight).
 func _update_halo(delta: float) -> void:
 	var iso := renderer.scene_viewport.get_camera_3d() == camera
+	var iso_w := 1.0 if iso else 0.0
+	if view_blend.active:
+		# Mid-switch: the halo shrinks away (or grows back) with the iso share,
+		# and the chase view's fades sit as far behind the car as at the chase end.
+		iso_w = 1.0 - view_blend.weight
+		iso = iso_w > 0.5
+		renderer.distance_fade = CHASE_FADE + Vector2.ONE * view_blend.extra_distance if chase_fade else Vector2.ZERO
+		lighting.fog_offset = view_blend.extra_distance
 	var origin := car.get_global_transform_interpolated().origin
-	HaloOccluder.set_target(origin + Vector3.UP * HALO_TARGET_HEIGHT, HaloOccluder.RADIUS if iso else 0.0)
+	HaloOccluder.set_target(origin + Vector3.UP * HALO_TARGET_HEIGHT, HaloOccluder.RADIUS * iso_w)
 	# Under cover the car sits in the occluder's shadow and would be a dim shape
 	# in the hole: light it, and the patch of road around it, while it is there.
 	_halo_light_level = move_toward(_halo_light_level, 1.0 if iso and _under_cover else 0.0, delta * HALO_LIGHT_FADE)
@@ -388,7 +477,7 @@ func _on_glyph_size_changed(px: int) -> void:
 
 ## Web build: the default glyph size for a device pixel ratio.
 static func web_glyph_px(ratio: float) -> int:
-	var base := AsciiSettings.new().glyph_px
+	var base := WEB_GLYPH_PX
 	if ratio <= 1.0:
 		return base
 	if ratio <= 2.0:
@@ -501,7 +590,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not controls.enabled:
 		return
 	if event.is_action_pressed(&"camera_toggle"):
-		set_chase_view(not chase_view)
+		blend_view(not chase_view)
 		flash("chase view" if chase_view else "iso view")
 		race_start.dismiss_tip()
 		get_viewport().set_input_as_handled()

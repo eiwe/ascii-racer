@@ -3,6 +3,11 @@
 ## kerbs, walls and supports, with collision built from the same data. Also
 ## the centre-line queries (lap progress, reset position, autopilot).
 ##
+## Which circuit: `def` (a Tracks definition, set before the node enters the
+## tree); the default is track 1, the figure of eight. Banking ("bank" ranges)
+## rolls the road, kerbs and walls together; surfaces ("surface", "patches")
+## give road faces their own colliders with a `surface` meta (Surfaces).
+##
 ## Editing: LAYOUT is a turtle walk from the origin heading north-east (the
 ## bridge deck is over the origin). Each entry is a straight ["S", length] or an
 ## arc ["A", radius, degrees] (+ = right turn). Exactly two straights have
@@ -62,49 +67,25 @@ const LAYER_SURFACE: int = 1 ## ground and road: what wheels stand on
 const LAYER_CAR: int = 2
 const LAYER_PROPS: int = 4
 
-## The figure of eight: east lobe (right turns) with the main straight, then the
-## west lobe (left turns) with the hairpin. Starts on the bridge heading NE.
-const LAYOUT: Array = [
-	["S", 6.0], # bridge deck and ramp down
-	["A", 8.0, 45.0], # sweeper onto the main straight (still on the ramp)
-	["S", 22.0], # main straight: start line, jump
-	["A", 6.0, 90.0],
-	["S", 9.25],
-	["A", 4.0, 90.0], # tightest right-hander
-	["S", 3.0],
-	["A", 14.0, -20.0], # flat-out S
-	["A", 14.0, 20.0],
-	["S", 2.0],
-	["A", 12.0, 45.0], # fast sweeper onto the diagonal
-	["S", 15.33], # diagonal: passes under the bridge
-	["S", -1.0],
-	["A", 8.0, -45.0],
-	["S", 8.0],
-	["A", 5.0, -180.0], # hairpin
-	["S", -1.0],
-	["A", 8.0, -45.0], # sweeper onto the ramp up
-	["S", 6.0],
-]
-const START_HEADING_DEG: float = -45.0 ## 0 = +X (east), 90 = +Z (south)
-## World (x, z) of the layout origin: the crossing under the bridge. South of
-## the drive test's pad (z < -8).
-const ORIGIN: Vector2 = Vector2(0.0, 12.0)
+## The circuit (a Tracks definition).
+var def: Dictionary = Tracks.FIGURE_EIGHT
+## Its parts, from `def`.
+var LAYOUT: Array:
+	get: return def.layout
+var START_HEADING_DEG: float:
+	get: return def.start_heading_deg
+var ORIGIN: Vector2:
+	get: return def.origin
+var ELEVATION: Array:
+	get: return def.elevation
+## Start line of this circuit (START_S below is track 1's, kept for its tests).
+var start_s: float:
+	get: return def.start_s
+## Base surface of the road.
+var surface: StringName:
+	get: return def.get("surface", Surfaces.ROAD)
 
-const ELEVATION: Array = [
-	# Bridge over the crossing at s = 0: deck road 1.6 above the ground road
-	# (underside 1.4 above it). 13-long cosine ramps: steepest 11 deg, and the
-	# crest / dip curvature (0.047 per unit) adds under half a g at top speed.
-	{"from": -16.5, "to": -3.5, "rise": [0.0, 1.6], "shape": "ease"},
-	{"from": -3.5, "to": 3.5, "rise": [1.6, 1.6], "shape": "flat", "deck": true},
-	{"from": 3.5, "to": 16.5, "rise": [1.6, 0.0], "shape": "ease"},
-	# Table-top jump on the main straight: kicker, table, landing. Sized for a
-	# top speed near 12: a low kicker so a flat-out car flies flat and comes
-	# down on the landing slope, which ends before the braking zone of the corner.
-	{"from": 21.0, "to": 24.0, "rise": [0.0, 0.3], "shape": "kick"},
-	{"from": 24.0, "to": 26.0, "rise": [0.3, 0.3], "shape": "flat"},
-	{"from": 26.0, "to": 33.5, "rise": [0.3, 0.0], "shape": "ease"},
-]
-## Distance along the centre line of the start line (on the main straight).
+## Track 1's start line (on the main straight); other circuits: start_s.
 const START_S: float = 19.5
 ## Deck supports: distance from the deck centre along the road, offset across it.
 const PILLAR_S: float = 3.0
@@ -117,6 +98,8 @@ var points: PackedVector3Array = PackedVector3Array()
 var tangents: PackedVector3Array = PackedVector3Array()
 ## Signed curvature (+ = right turn) at each sample.
 var curvature: PackedFloat32Array = PackedFloat32Array()
+## Banking (roll, radians, + = right side up) at each sample.
+var banks: PackedFloat32Array = PackedFloat32Array()
 var length: float = 0.0
 ## World AABB of the road for framing.
 var bounds: AABB
@@ -139,7 +122,8 @@ func _ready() -> void:
 	_sample()
 	_build_ground()
 	_build_road()
-	_find_crossing()
+	if has_bridge():
+		_find_crossing()
 
 
 # --- centre line ------------------------------------------------------------
@@ -262,12 +246,129 @@ func _elevation_entry(s: float) -> Dictionary:
 	return {}
 
 
-## 0 = flat road with kerbs, 1 = raised (walls, solid underneath), 2 = bridge deck.
+var _bank_sides: Dictionary = {} ## bank range -> -1 / +1
+
+
+## Which way a bank range rolls: the outside of the turning it covers up (from
+## the curvature summed over the range; right turns: left side up, roll < 0).
+func _bank_side(b: Dictionary) -> float:
+	if _bank_sides.has(b):
+		return _bank_sides[b]
+	var s0: float = b.from
+	var s1: float = b.to
+	var turn := 0.0
+	var n := 40
+	for i in n:
+		turn += float(_eval(s0 + (s1 - s0) * (i + 0.5) / n)[2])
+	var side := -1.0 if turn > 0.0 else 1.0
+	_bank_sides[b] = side
+	return side
+
+
+## Road height at s above ROAD_Y: the elevation, plus on banked road the lift
+## that keeps its low edge at ground level (none without banking).
+func lift_at(s: float) -> float:
+	var b := bank_at(s)
+	if b == 0.0:
+		return height_at(s)
+	return height_at(s) + (ROAD_HALF_WIDTH + WALL_THICK) * absf(sin(b))
+
+
+## 0 = flat road with kerbs, 1 = raised (walls, solid underneath; also banked
+## road), 2 = bridge deck.
 func structure_at(s: float) -> int:
 	var e := _elevation_entry(s)
 	if e.is_empty():
-		return 0
+		return 1 if bank_at(s) != 0.0 else 0
 	return 2 if e.get("deck", false) else 1
+
+
+## True when the circuit has a bridge deck (and so needs the halo).
+func has_bridge() -> bool:
+	for e: Dictionary in ELEVATION:
+		if e.get("deck", false):
+			return true
+	return false
+
+
+## Banking (roll) at arc length s, radians (+ = right side up), eased in and
+## out. A bank range's "deg" raises the outside of the turn it covers (the side
+## comes from the curvature in the middle of the range).
+func bank_at(s: float) -> float:
+	for b: Dictionary in def.get("bank", []):
+		var s0: float = b.from
+		var s1: float = b.to
+		var x := fposmod(s - s0, length)
+		if x > s1 - s0:
+			continue
+		var side := _bank_side(b)
+		var k := 1.0
+		var ein: float = b.get("ease_in", 0.0)
+		var eout: float = b.get("ease_out", 0.0)
+		if ein > 0.0 and x < ein:
+			k = 0.5 - 0.5 * cos(PI * x / ein)
+		elif eout > 0.0 and x > (s1 - s0) - eout:
+			k = 0.5 - 0.5 * cos(PI * ((s1 - s0) - x) / eout)
+		return deg_to_rad(float(b.deg)) * k * side
+	return 0.0
+
+
+## Surface under a point `u` across the road (- = left) at arc length s.
+func surface_at(s: float, u: float = 0.0) -> StringName:
+	for p: Dictionary in def.get("patches", []):
+		var s0: float = p.from
+		var s1: float = p.to
+		if fposmod(s - s0, length) > s1 - s0:
+			continue
+		var r: Array = p.get("u", [-INF, INF])
+		if u >= float(r[0]) and u <= float(r[1]):
+			return p.surface
+	return surface
+
+
+## Grip of the road at s (across its width, the lowest), as a factor on asphalt.
+func grip_at(s: float) -> float:
+	var g := float(Surfaces.get_value(surface, "grip", 1.0))
+	for p: Dictionary in def.get("patches", []):
+		if fposmod(s - float(p.from), length) <= float(p.to) - float(p.from):
+			g = minf(g, float(Surfaces.get_value(p.surface, "grip", 1.0)))
+	return g
+
+
+## Cornering acceleration a driver can plan for at s, given what it would
+## plan on flat asphalt (`a_lat`): scaled by the surface's grip, and on banked
+## road more, as the road pushes the car round: g (mu + tan b) / (1 - mu tan b).
+## On flat asphalt it is exactly a_lat.
+func corner_accel(a_lat: float, s: float) -> float:
+	var g := grip_at(s)
+	var a := a_lat if g == 1.0 else a_lat * g
+	var b := absf(bank_at(s))
+	if b == 0.0:
+		return a
+	var mu := a / Car.G
+	var tb := tan(b)
+	return Car.G * (mu + tb) / maxf(1.0 - mu * tb, 0.35)
+
+
+## Flat-out stretches (s ranges): over each jump, from a little before its
+## kicker to the end of its landing (drivers keep the throttle down there).
+func flat_out_ranges() -> Array[Vector2]:
+	var out: Array[Vector2] = []
+	var cur := Vector2(-1.0, -1.0)
+	for e: Dictionary in ELEVATION:
+		if not e.get("jump", false):
+			continue
+		var s0: float = e.from
+		var s1: float = e.to
+		if cur.x >= 0.0 and s0 - 2.0 <= cur.y + 0.01:
+			cur.y = maxf(cur.y, s1)
+		else:
+			if cur.x >= 0.0:
+				out.append(cur)
+			cur = Vector2(s0 - 2.0, s1)
+	if cur.x >= 0.0:
+		out.append(cur)
+	return out
 
 
 func _sample() -> void:
@@ -279,15 +380,17 @@ func _sample() -> void:
 	points.resize(n)
 	tangents.resize(n)
 	curvature.resize(n)
+	banks.resize(n)
 	for i in n:
 		var s := i * _ds
 		var e := _eval(s)
 		var p: Vector2 = e[0]
 		var h: float = e[1]
-		points[i] = Vector3(p.x, ROAD_Y + height_at(s), p.y)
-		var slope := (height_at(s + 0.05) - height_at(s - 0.05)) / 0.1
+		points[i] = Vector3(p.x, ROAD_Y + lift_at(s), p.y)
+		var slope := (lift_at(s + 0.05) - lift_at(s - 0.05)) / 0.1
 		tangents[i] = Vector3(cos(h), slope, sin(h)).normalized()
 		curvature[i] = e[2]
+		banks[i] = bank_at(s)
 	bounds = AABB(points[0], Vector3.ZERO)
 	for q in points:
 		bounds = bounds.expand(q)
@@ -328,11 +431,13 @@ static func _right(t: Vector3) -> Vector3:
 ## colours per span, collision ("road" / "wall"), deck (bool)]. Points run
 ## clockwise seen looking along the road, so face normals point outwards.
 ## `ground` is the ground height relative to the road surface.
-static func _profile(kind: int, ground: float, stripe: Color) -> Array:
+static func _profile(kind: int, ground: float, stripe: Color, kerbs: bool = true) -> Array:
 	var h := ROAD_HALF_WIDTH
 	var road := [
 		[Vector2(-h, 0.0), Vector2(-LINE_OUT, 0.0), Vector2(-LINE_IN, 0.0), Vector2(LINE_IN, 0.0), Vector2(LINE_OUT, 0.0), Vector2(h, 0.0)],
 		[COL_ASPHALT, COL_LINE, COL_ASPHALT, COL_LINE, COL_ASPHALT], "road", kind == 2]
+	if kind == 0 and not kerbs:
+		return [road]
 	if kind == 0:
 		var k := KERB_WIDTH
 		var top := KERB_HEIGHT
@@ -369,6 +474,7 @@ static func _profile(kind: int, ground: float, stripe: Color) -> Array:
 func _build_road() -> void:
 	var road_faces := PackedVector3Array()
 	var wall_faces := PackedVector3Array()
+	var surface_faces: Dictionary = {} ## other surfaces (patches) -> faces
 	var main := _MeshData.new()
 	var raised := _MeshData.new() # ramps and the jump: can hide the car, so it gets the halo
 	var deck := _MeshData.new()
@@ -380,8 +486,14 @@ func _build_road() -> void:
 		var e := _eval(s)
 		var p: Vector2 = e[0]
 		var hd: float = e[1]
-		var c := Vector3(p.x, ROAD_Y + height_at(s), p.y)
-		rows.append([c, Vector3(-sin(hd), 0.0, cos(hd))])
+		var c := Vector3(p.x, ROAD_Y + lift_at(s), p.y)
+		var right := Vector3(-sin(hd), 0.0, cos(hd))
+		var roll := bank_at(s)
+		# Banked: the cross-section turns about the tangent (no roll: exactly the
+		# flat right / up vectors).
+		var r2 := right * cos(roll) + Vector3.UP * sin(roll)
+		var u2 := Vector3.UP * cos(roll) - right * sin(roll)
+		rows.append([c, r2, u2])
 	for j in n:
 		var s_mid := (j + 0.5) * ds
 		var kind := structure_at(s_mid)
@@ -390,8 +502,13 @@ func _build_road() -> void:
 		var b: Array = rows[j + 1]
 		var ga := GROUND_VISUAL_Y - (a[0] as Vector3).y
 		var gb := GROUND_VISUAL_Y - (b[0] as Vector3).y
-		var pa := _profile(kind, minf(ga, -0.002), stripe)
-		var pb := _profile(kind, minf(gb, -0.002), stripe)
+		var kerbs: bool = def.get("kerbs", true)
+		# Banked: the sides reach down past the ground under the raised outer edge.
+		var deep_a := 2.0 * (ROAD_HALF_WIDTH + WALL_THICK) * absf(sin(bank_at(j * ds)))
+		var deep_b := 2.0 * (ROAD_HALF_WIDTH + WALL_THICK) * absf(sin(bank_at((j + 1) * ds)))
+		var pa := _profile(kind, minf(ga, -0.002) - deep_a, stripe, kerbs)
+		var pb := _profile(kind, minf(gb, -0.002) - deep_b, stripe, kerbs)
+		_apply_surfaces(pa, pb, s_mid)
 		for k in pa.size():
 			var strip_a: Array = pa[k]
 			var strip_b: Array = pb[k]
@@ -400,7 +517,10 @@ func _build_road() -> void:
 			var cols: Array = strip_a[1]
 			var target := deck if strip_a[3] else (raised if kind != 0 else main)
 			var faces := road_faces if strip_a[2] == "road" else wall_faces
+			var span_surf: Array = strip_a[4] if strip_a.size() > 4 else []
 			for m in pts_a.size() - 1:
+				if not span_surf.is_empty():
+					faces = road_faces if span_surf[m] == surface else surface_faces.get(span_surf[m], PackedVector3Array())
 				var v00 := _at(a, pts_a[m])
 				var v01 := _at(a, pts_a[m + 1])
 				var v10 := _at(b, pts_b[m])
@@ -409,6 +529,8 @@ func _build_road() -> void:
 					continue
 				target.quad(v00, v01, v11, v10, cols[m])
 				faces.append_array([v00, v11, v01, v00, v10, v11]) # clockwise from outside, as rendered
+				if not span_surf.is_empty() and span_surf[m] != surface:
+					surface_faces[span_surf[m]] = faces
 		# Wall ends where a raised stretch starts or stops (next to the kerbs).
 		var kind_next := structure_at((j + 1.5) * ds)
 		if (kind == 0) != (kind_next == 0):
@@ -472,13 +594,59 @@ func _build_road() -> void:
 	HaloOccluder.add_occluder(self, "Pillars", pillars.mesh(mat), TRACK_TINT)
 
 	track_body = _static_body("TrackBody", LAYER_SURFACE, road_faces)
-	track_body.set_meta("surface", &"road")
+	track_body.set_meta("surface", surface)
+	for sid: StringName in surface_faces:
+		var b := _static_body("TrackBody_" + String(sid), LAYER_SURFACE, surface_faces[sid])
+		b.set_meta("surface", sid)
 	structure_body = _static_body("StructureBody", LAYER_PROPS, wall_faces)
+
+
+## Road colour and splits for this row's surfaces: with a base surface other
+## than asphalt the road takes its colour (no painted lines); patches split the
+## road strip at their edges and colour their spans. Adds the span surfaces as
+## a fifth entry of the road strip.
+func _apply_surfaces(pa: Array, pb: Array, s_mid: float) -> void:
+	var patches: Array = def.get("patches", [])
+	if surface == Surfaces.ROAD and patches.is_empty():
+		return
+	for prof: Array in [pa, pb]:
+		for strip: Array in prof:
+			var pts0: Array = strip[0]
+			if strip[2] != "road" or pts0.size() != 6 or absf((pts0[0] as Vector2).x + ROAD_HALF_WIDTH) > 0.001 \
+					or absf((pts0[5] as Vector2).x - ROAD_HALF_WIDTH) > 0.001:
+				continue # not the road strip (a kerb)
+			var us: Array = [-ROAD_HALF_WIDTH, -LINE_OUT, -LINE_IN, LINE_IN, LINE_OUT, ROAD_HALF_WIDTH] if surface == Surfaces.ROAD \
+					else [-ROAD_HALF_WIDTH, ROAD_HALF_WIDTH]
+			for p: Dictionary in patches:
+				if fposmod(s_mid - float(p.from), length) > float(p.to) - float(p.from):
+					continue
+				var r: Array = p.get("u", [-ROAD_HALF_WIDTH, ROAD_HALF_WIDTH])
+				for v: float in [float(r[0]), float(r[1])]:
+					if v > -ROAD_HALF_WIDTH and v < ROAD_HALF_WIDTH and not us.has(v):
+						us.append(v)
+			us.sort()
+			var pts: Array = []
+			var cols: Array = []
+			var surfs: Array = []
+			for k in us.size():
+				pts.append(Vector2(us[k], 0.0))
+			for k in us.size() - 1:
+				var mid: float = (us[k] + us[k + 1]) * 0.5
+				var sid := surface_at(s_mid, mid)
+				surfs.append(sid)
+				if sid == Surfaces.ROAD:
+					cols.append(COL_LINE if absf(mid) > LINE_IN and absf(mid) < LINE_OUT else COL_ASPHALT)
+				else:
+					cols.append(Surfaces.get_value(sid, "colour", COL_ASPHALT))
+			strip[0] = pts
+			strip[1] = cols
+			strip.append(surfs)
 
 
 ## World position of a profile point (u across to the right, dy up) on a row.
 static func _at(row: Array, q: Vector2) -> Vector3:
-	return (row[0] as Vector3) + (row[1] as Vector3) * q.x + Vector3.UP * q.y
+	var up: Vector3 = row[2] if row.size() > 2 else Vector3.UP
+	return (row[0] as Vector3) + (row[1] as Vector3) * q.x + up * q.y
 
 
 ## Four-vertex faces (outward winding as _MeshData.quad expects) of an upright box.
@@ -658,5 +826,12 @@ func max_curvature(s: float, ahead: float) -> float:
 ## Transform of a car standing on the centre line at `s`, facing along it.
 func pose_at(s: float, lateral: float = 0.0) -> Transform3D:
 	var t := tangent_at(s)
-	var p := point_at(s) + _right(t) * lateral
-	return Transform3D(Basis.looking_at(t, Vector3.UP), p)
+	var roll := banks[index_at(s)] if banks.size() > 0 else 0.0
+	if roll == 0.0:
+		var p := point_at(s) + _right(t) * lateral
+		return Transform3D(Basis.looking_at(t, Vector3.UP), p)
+	# Banked: across the rolled road, standing on it.
+	var r := _right(t)
+	var r2 := r * cos(roll) + Vector3.UP * sin(roll)
+	var up := Vector3.UP * cos(roll) - r * sin(roll)
+	return Transform3D(Basis.looking_at(t, up), point_at(s) + r2 * lateral)

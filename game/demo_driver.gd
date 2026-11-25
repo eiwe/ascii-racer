@@ -59,7 +59,9 @@ var speed_cap: float = INF
 var drift_inside: float = 0.0
 var drift_gain: float = 4.0
 ## Flat out from here to here (the jump), as s along the lap.
-const FLAT_OUT: Vector2 = Vector2(19.0, 33.5)
+## Flat out over the jumps: from the track's jump data (Track.flat_out_ranges;
+## track 1: 19 to 33.5).
+var _flat_out: Array[Vector2] = []
 ## Body slip beyond which an unplanned slide is caught.
 const SLIDE_CATCH_DEG: float = 8.0
 ## Steering is capped at the angle that asks the tyres for this share of their
@@ -109,6 +111,7 @@ func _ready() -> void:
 		_rng.seed = rng_seed
 	else:
 		_rng.randomize()
+	_flat_out = track.flat_out_ranges()
 	_build_line()
 	_find_corners()
 	_new_lap()
@@ -118,8 +121,15 @@ func _points() -> int:
 	return int(round(track.length / LINE_STEP))
 
 
+func _in_flat_out(s: float, margin: float) -> bool:
+	for r in _flat_out:
+		if s >= r.x - margin and s <= r.y + margin:
+			return true
+	return false
+
+
 func _width_at(s: float) -> float:
-	if s >= FLAT_OUT.x - 1.0 and s <= FLAT_OUT.y + 1.0:
+	if _in_flat_out(s, 1.0):
 		return WIDTH_JUMP
 	# Narrow a little before a raised stretch (walls) starts, not at it.
 	for ahead: float in [0.0, 1.5, 3.0]:
@@ -208,12 +218,17 @@ func _build_speed() -> void:
 		var b := pts[i]
 		var c := pts[(i + 1) % n]
 		var k := _curvature(Vector2(a.x, a.z), Vector2(b.x, b.z), Vector2(c.x, c.z))
-		_speed[i] = minf(20.0, sqrt(a_lat / maxf(k, 1e-4)))
+		_speed[i] = minf(20.0, sqrt(_corner_accel(a_lat, i * ds) / maxf(k, 1e-4)))
 	var decel := brake_accel * _lap_brake * grip
 	for pass_i in 2:
 		for j in range(n - 1, -1, -1):
 			var nxt := _speed[(j + 1) % n]
 			_speed[j] = minf(_speed[j], sqrt(nxt * nxt + 2.0 * decel * ds))
+
+
+## Cornering acceleration the plan allows at s (Track.corner_accel).
+func _corner_accel(a_lat: float, s: float) -> float:
+	return track.corner_accel(a_lat, s)
 
 
 static func _curvature(a: Vector2, b: Vector2, c: Vector2) -> float:
@@ -295,7 +310,7 @@ func _physics_process(delta: float) -> void:
 	if lost:
 		want = 3.0
 		thr = clampf((want - v) * 1.5, 0.0, 0.7)
-	var flat := progress >= FLAT_OUT.x and progress <= FLAT_OUT.y
+	var flat := _in_flat_out(progress, 0.0)
 	if flat:
 		thr = 1.0
 		brk = 0.0

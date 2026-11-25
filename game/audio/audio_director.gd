@@ -57,6 +57,13 @@ const DEFAULT_OPPONENT_LEVEL: int = 3
 var opponent_level: int = DEFAULT_OPPONENT_LEVEL
 ## The isometric camera's zoom: 0 = AUTO, 1.. = FollowCamera.ZOOM_STEPS[n - 1].
 var zoom_setting: int = 0
+## The selected track ([game] track) and per track ([track.<id>]) its time of
+## day, opponent level and best lap (-1 = none). `opponent_level` is the
+## selected track's level (the pause menu edits it).
+const TIMES: PackedStringArray = ["morning", "noon", "night"]
+const DEFAULT_TIME: String = "morning"
+var track_id: String = Tracks.DEFAULT_ID
+var track_settings: Dictionary = {} ## id -> {time, opponent, best}
 ## The glyph size the player chose with - / = ([display] section; 0 = none, the
 ## platform default applies) and the display scale (AsciiControls.display_scale)
 ## it was chosen at, so it can be kept the same size on another display.
@@ -313,7 +320,56 @@ func set_sfx_volume(v: float) -> void:
 
 func set_opponent_level(l: int) -> void:
 	opponent_level = clampi(l, 0, 5)
+	_track_entry(track_id).opponent = opponent_level
 	dirty = true
+
+
+func _track_entry(id: String) -> Dictionary:
+	if not track_settings.has(id):
+		track_settings[id] = {"time": DEFAULT_TIME, "opponent": DEFAULT_OPPONENT_LEVEL, "best": -1.0}
+	return track_settings[id]
+
+
+## Selects a track: its opponent level becomes the current one.
+func select_track(id: String) -> void:
+	track_id = id
+	opponent_level = int(_track_entry(id).opponent)
+	dirty = true
+
+
+func track_time(id: String) -> String:
+	return String(_track_entry(id).time)
+
+
+func set_track_time(id: String, t: String) -> void:
+	_track_entry(id).time = t if TIMES.has(t) else DEFAULT_TIME
+	dirty = true
+
+
+func track_opponent(id: String) -> int:
+	return int(_track_entry(id).opponent)
+
+
+func set_track_opponent(id: String, l: int) -> void:
+	_track_entry(id).opponent = clampi(l, 0, 5)
+	if id == track_id:
+		opponent_level = clampi(l, 0, 5)
+	dirty = true
+
+
+func best_lap(id: String) -> float:
+	return float(_track_entry(id).best)
+
+
+## Records a lap; true (and saved) when it is the track's best.
+func record_lap(id: String, t: float) -> bool:
+	var e := _track_entry(id)
+	if float(e.best) > 0.0 and t >= float(e.best):
+		return false
+	e.best = t
+	dirty = true
+	save_settings()
+	return true
 
 
 func set_glyph_choice(px: int, scale: float) -> void:
@@ -370,6 +426,20 @@ func load_settings() -> void:
 	muted = bool(cfg.get_value("audio", "muted", false))
 	opponent_level = clampi(int(cfg.get_value("game", "opponent", DEFAULT_OPPONENT_LEVEL)), 0, 5)
 	zoom_setting = clampi(int(cfg.get_value("game", "zoom", 0)), 0, FollowCamera.ZOOM_STEPS.size())
+	track_settings.clear()
+	for id in Tracks.ids():
+		var sec := "track." + id
+		var e := _track_entry(id)
+		# Before tracks had their own settings the opponent level was global: track 1 keeps it.
+		var legacy := opponent_level if id == Tracks.DEFAULT_ID else DEFAULT_OPPONENT_LEVEL
+		e.opponent = clampi(int(cfg.get_value(sec, "opponent", legacy)), 0, 5)
+		var t := String(cfg.get_value(sec, "time", DEFAULT_TIME))
+		e.time = t if TIMES.has(t) else DEFAULT_TIME
+		e.best = float(cfg.get_value(sec, "best", -1.0))
+	track_id = String(cfg.get_value("game", "track", Tracks.DEFAULT_ID))
+	if not Tracks.ids().has(track_id):
+		track_id = Tracks.DEFAULT_ID
+	opponent_level = int(_track_entry(track_id).opponent)
 	glyph_px = clampi(int(cfg.get_value("display", "glyph_px", 0)), 0, 64)
 	glyph_scale = maxf(float(cfg.get_value("display", "glyph_scale", 1.0)), 0.5)
 
@@ -386,6 +456,13 @@ func save_settings() -> void:
 	cfg.set_value("audio", "muted", muted)
 	cfg.set_value("game", "opponent", opponent_level)
 	cfg.set_value("game", "zoom", zoom_setting)
+	cfg.set_value("game", "track", track_id)
+	for id: String in track_settings:
+		var e: Dictionary = track_settings[id]
+		cfg.set_value("track." + id, "time", e.time)
+		cfg.set_value("track." + id, "opponent", e.opponent)
+		if float(e.best) > 0.0:
+			cfg.set_value("track." + id, "best", e.best)
 	if glyph_px > 0:
 		cfg.set_value("display", "glyph_px", glyph_px)
 		cfg.set_value("display", "glyph_scale", glyph_scale)

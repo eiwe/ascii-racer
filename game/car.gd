@@ -218,6 +218,12 @@ var steer_angle: float = 0.0 ## front wheel angle, radians, + right
 var steer_lock: float = 0.0 ## full-lock angle at the current speed, radians
 var wheels_grounded: int = 0
 var wheels_on_road: int = 0
+## Surface under each wheel (fl, fr, rl, rr) last physics step (Surfaces id; &"" in the air).
+var wheel_surface: Array[StringName] = [&"", &"", &"", &""]
+## Sum of the grounded wheels' grip relative to asphalt, and whether any wheel
+## is on a surface other than asphalt or the plain ground (dirt, snow...).
+var _grip_ratio_sum: float = 0.0
+var _special_surface: bool = false
 var slip_angle: float = 0.0 ## car body slip (radians), + = moving to its right
 var local_accel: Vector3 = Vector3.ZERO ## filtered, body frame: x right, z forward
 ## Per wheel (fl, fr, rl, rr): how much of the tyre's grip is asked for, 1 = at the
@@ -382,6 +388,8 @@ func _physics_process(delta: float) -> void:
 
 	wheels_grounded = 0
 	wheels_on_road = 0
+	_grip_ratio_sum = 0.0
+	_special_surface = false
 	for i in 4:
 		var front := i < 2
 		var mount := xf * _mounts[i]
@@ -391,14 +399,20 @@ func _physics_process(delta: float) -> void:
 		if hit.is_empty():
 			_wheel_drop[i] = travel_up + travel_down
 			wheel_usage[i] = 0.0
+			wheel_surface[i] = &""
 			continue
 		var dist := mount.distance_to(hit.position)
 		var hub := clampf(dist - wheel_radius, 0.0, travel_up + travel_down)
 		_wheel_drop[i] = hub
 		wheels_grounded += 1
-		var on_road: bool = hit.collider.get_meta(&"surface", &"road") == &"road"
+		var surf: StringName = hit.collider.get_meta(&"surface", &"road")
+		wheel_surface[i] = surf
+		var classic := Surfaces.is_classic(surf)
+		var on_road: bool = surf == &"road" or not classic and bool(Surfaces.get_value(surf, "on_road", true))
 		if on_road:
 			wheels_on_road += 1
+		if not classic:
+			_special_surface = true
 
 		var contact: Vector3 = hit.position
 		var normal: Vector3 = hit.normal
@@ -420,7 +434,9 @@ func _physics_process(delta: float) -> void:
 		var v_long := pv.dot(wf)
 		var v_lat := pv.dot(ws)
 
-		var mu := (grip_road if on_road else grip_ground) * (front_grip if front else rear_grip)
+		var surf_grip := (grip_road if on_road else grip_ground) if classic else grip_road * float(Surfaces.get_value(surf, "grip", 1.0))
+		_grip_ratio_sum += surf_grip / grip_road
+		var mu := surf_grip * (front_grip if front else rear_grip)
 		if not front and handbrake_input and (not drift_mode or forward_speed < drift_min_speed and absf(steer_input) >= drift_steer_threshold):
 			mu *= handbrake_rear_grip
 		var grip := mu * load
@@ -429,8 +445,10 @@ func _physics_process(delta: float) -> void:
 
 		# Lateral: slip-angle curve, peak at peak_slip, easing to slide_grip beyond.
 		var alpha := atan2(v_lat, maxf(absf(v_long), low_speed_slip))
-		var x := alpha / deg_to_rad(peak_slip_deg)
-		var shape := x if absf(x) <= 1.0 else signf(x) * lerpf(1.0, slide_grip, clampf((absf(x) - 1.0) / 1.5, 0.0, 1.0))
+		var ps := peak_slip_deg if classic else peak_slip_deg * float(Surfaces.get_value(surf, "peak_slip", 1.0))
+		var sg := slide_grip if classic else minf(slide_grip * float(Surfaces.get_value(surf, "slide_grip", 1.0)), 1.0)
+		var x := alpha / deg_to_rad(ps)
+		var shape := x if absf(x) <= 1.0 else signf(x) * lerpf(1.0, sg, clampf((absf(x) - 1.0) / 1.5, 0.0, 1.0))
 		var f_lat := -grip * shape
 		if not front and throttle_input > 0.0 and forward_speed > -0.5:
 			var rv := clampf(forward_speed / top_speed, 0.0, 1.0)
@@ -467,6 +485,8 @@ func _physics_process(delta: float) -> void:
 		braking += corner_mass * rolling_decel
 		if not on_road:
 			braking += corner_mass * offroad_drag * absf(v_long)
+		elif not classic:
+			braking += corner_mass * float(Surfaces.get_value(surf, "drag", 0.0)) * absf(v_long)
 		# Brakes and drag only ever bring the contact patch to rest, never reverse it.
 		f_long -= signf(v_long) * minf(braking, absf(v_long) * stop)
 
@@ -630,6 +650,8 @@ func _apply_drift_forces(delta: float, up: Vector3, fwd: Vector3) -> void:
 	if drift_state == Drift.DRIFT:
 		var on_road := float(wheels_on_road) / maxf(wheels_grounded, 1.0)
 		var surface := lerpf(grip_ground, grip_road, on_road) / grip_road
+		if _special_surface:
+			surface = _grip_ratio_sum / maxf(wheels_grounded, 1.0)
 		var kappa := drift_carve * (drift_carve_neutral + (1.0 - drift_carve_neutral) * inside if inside >= 0.0 else drift_carve_neutral * (1.0 + inside))
 		var a_lat := minf(spd * spd * kappa, drift_grip * G * surface) * g_frac
 		drift_radius = spd * spd / a_lat if a_lat > 1e-3 else INF

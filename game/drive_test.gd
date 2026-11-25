@@ -27,7 +27,10 @@ var game: Node
 var out_dir: String = ""
 
 var car: Car
-var track: Track
+## The current circuit (scenarios can switch it).
+var track: Track:
+	get:
+		return game.track
 var world: Node3D
 var renderer: AsciiRenderer
 var camera: FollowCamera
@@ -39,7 +42,6 @@ var _m: Dictionary = {}
 
 func _ready() -> void:
 	car = game.car
-	track = game.track
 	world = game.world
 	renderer = game.renderer
 	camera = game.camera
@@ -163,7 +165,7 @@ func _run() -> void:
 		if arg.begins_with("--dtonly="):
 			only = arg.trim_prefix("--dtonly=")
 	for t: String in ["spawn", "accel_brake", "corners", "limit", "nitro", "nitro_shots", "turns", "handbrake", "drift", "feel", "offroad", "kerbs", "tree", "cones", "jump", "bridge", "reset_bridge", "keys",
-			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting"]:
+			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting", "level_select", "tracks", "camera_blend", "time_of_day"]:
 		if only == "" or t in only.split(","):
 			await call("_test_" + t)
 	log_line("\n[summary] preset %s" % game.tuning.current)
@@ -1852,10 +1854,18 @@ func _test_chase() -> void:
 	var iso_size := camera.size
 	_key(KEY_Q, true)
 	_key(KEY_Q, false)
+	# Q blends into the chase view (ViewBlend); wait for it to land.
+	var blend_frames := 0
+	while game.view_blend.active and blend_frames < 240:
+		await _frames(1)
+		blend_frames += 1
 	await _frames(2)
 	var on: bool = game.chase_view and renderer.scene_viewport.get_camera_3d() == chase
 	var snap := renderer.snap_step(chase)
 	await _tap(JOY_BUTTON_B)
+	while game.view_blend.active and blend_frames < 480:
+		await _frames(1)
+		blend_frames += 1
 	await _frames(2)
 	var back: bool = not game.chase_view and renderer.scene_viewport.get_camera_3d() == camera
 	log_line("  Q: chase view %s (renderer camera is the chase camera; perspective, fov %.0f, near %.2f, far %.0f; grid snap step %s = inactive); pad B: back to iso %s, iso transform identical %s, zoom identical %s" % [
@@ -2382,8 +2392,11 @@ func _test_light_roundtrip() -> void:
 	car.teleport(world.grid_pose())
 	camera.snap_to_target()
 	await _frames(480)
-	# Hold the car still: earlier tests can leave it creeping.
+	# Hold the car still: earlier tests can leave it creeping. Then put the
+	# camera on it: the calm iso camera can still be gliding after 4 s.
 	car.freeze = true
+	await _frames(10)
+	camera.snap_to_target()
 	await _frames(10)
 	var classic := Lighting.CLASSIC_MODE
 	l.set_mode(classic)
@@ -2410,6 +2423,12 @@ func _test_light_roundtrip() -> void:
 	var same := a.get_data() == b.get_data()
 	var same_raw := ar.get_data() == br.get_data()
 	log_line("  classic before == after: ascii %s, raw scene %s" % [same, same_raw])
+	if not (same and same_raw):
+		# Keep both frames to see where they differ.
+		ar.save_png(out_dir.path_join("72_roundtrip_raw_before.png"))
+		br.save_png(out_dir.path_join("72_roundtrip_raw_after.png"))
+		a.save_png(out_dir.path_join("72_roundtrip_before.png"))
+		b.save_png(out_dir.path_join("72_roundtrip_after.png"))
 	_m["classic roundtrip identical"] = same and same_raw
 	l.reset_sun()
 	l.set_mode(Lighting.DEFAULT_MODE)
@@ -4202,7 +4221,7 @@ func _test_camera_tip() -> void:
 	rs.cancel()
 	rs.tip_pending = true
 	game.reset_to_grid()
-	await _frames(40)
+	await _frames(90) # past the view blend
 	await _shot("99_tip_chase.png")
 	game.set_chase_view(false)
 	# Window captures: the tip, and the final legend (keyboard and pad) with the
@@ -4286,3 +4305,272 @@ func _test_glyph_setting() -> void:
 	log_line("  back to %d px with - twice: saved glyph_px %d, file has [display] %s" % [renderer.settings.glyph_px, au.glyph_px, file.contains("[display]")])
 	_m["glyph reset"] = "saved %d, section %s" % [au.glyph_px, file.contains("[display]")]
 	game.controls.enabled = false
+
+
+
+# --- tracks and the level select ---------------------------------------------------------
+
+## The level select on each track and time of day at 16:9 and 21:9, a track
+## change through its wipe, and back.
+func _test_level_select() -> void:
+	log_line("\n[level select] screenshots per time of day and output shape")
+	var ls: LevelSelect = game.level_select
+	game.audio.select_track(Tracks.DEFAULT_ID)
+	ls.open()
+	await _frames(30)
+	for asp: Array in [["16x9", Vector2i(1600, 900)], ["21x9", Vector2i(2100, 900)]]:
+		renderer.fixed_output_size = asp[1]
+		await _frames(5)
+		for t: String in LevelSelect.TIMES:
+			game.audio.set_track_time(ls.track_id(), t)
+			game.apply_time_of_day(t)
+			await _frames(40)
+			await _shot("80_select_%s_%s_%s.png" % [ls.track_id(), t, asp[0]])
+	renderer.fixed_output_size = SHOT_SIZE
+	game.audio.set_track_time(Tracks.DEFAULT_ID, "morning")
+	game.apply_time_of_day("morning")
+	# Next track, through the wipe.
+	var t0 := Time.get_ticks_msec()
+	ls._move(Vector2i.RIGHT)
+	var mid_shot := false
+	while ls._wipe >= 0.0:
+		await get_tree().process_frame
+		if not mid_shot and ls._wipe > 0.3:
+			mid_shot = true
+			await _shot("80_select_wipe.png")
+	log_line("  track change: now %s (%s), wipe %.2f s real time" % [ls.track_id(), game.world.track_def.name, (Time.get_ticks_msec() - t0) / 1000.0])
+	await _frames(40)
+	await _shot("80_select_%s_morning_16x9.png" % ls.track_id())
+	ls.focus = LevelSelect.Focus.OPPONENT
+	ls._move(Vector2i.RIGHT)
+	await _frames(10)
+	await _shot("80_select_%s_opponent_row.png" % ls.track_id())
+	_m["select"] = "track change to %s ok, opponent now %d" % [ls.track_id(), game.audio.track_opponent(ls.track_id())]
+	ls._move(Vector2i.LEFT)
+	ls.focus = LevelSelect.Focus.PREVIEW
+	ls._move(Vector2i.LEFT)
+	while ls._wipe >= 0.0:
+		await get_tree().process_frame
+	ls.close()
+	game.audio.select_track(Tracks.DEFAULT_ID)
+	await _frames(10)
+	log_line("  back on %s, select closed" % game.world.track_def.id)
+
+
+## Switching tracks: rebuild cost and leaks, and driving the draft second track
+## (banked turns, dirt, jumps) with the autopilot, the reel's driver and the
+## level-5 opponent.
+func _test_tracks() -> void:
+	log_line("\n[tracks] switching circuits and driving the second one")
+	await _frames(10)
+	var nodes0 := get_tree().get_node_count()
+	var other: String = Tracks.ALL[1].id
+	var t0 := Time.get_ticks_usec()
+	game.set_track(other)
+	var build_ms := (Time.get_ticks_usec() - t0) / 1000.0
+	var tr: Track = game.track
+	log_line("  %s: length %.1f, built in %.0f ms; flat-out ranges %s; banked %.0f deg max" % [other, tr.length, build_ms,
+		str(tr.flat_out_ranges()), rad_to_deg(Array(tr.banks).map(func(b: float) -> float: return absf(b)).max())])
+	for sid in [&"road", &"dirt"]:
+		log_line("    surface %s: %d colliders" % [sid, tr.find_children("*", "StaticBody3D", true, false).filter(func(b: Node) -> bool: return b.get_meta(&"surface", &"") == sid).size()])
+	await _frames(2)
+	var space := car.get_world_3d().direct_space_state
+	for sp: float in [18.0, 22.0, 26.0, 30.0, 38.0]:
+		var line := PackedStringArray()
+		var xf := tr.pose_at(sp)
+		for u: float in [-1.6, -1.3, -0.6, 0.0, 0.6, 1.3, 1.6]:
+			var o := xf.origin + Vector3(-tr.tangent_at(sp).z, 0.0, tr.tangent_at(sp).x).normalized() * u
+			var q := PhysicsRayQueryParameters3D.create(o + Vector3.UP * 3.0, o - Vector3.UP * 3.0, Track.LAYER_SURFACE | Track.LAYER_PROPS)
+			var h := space.intersect_ray(q)
+			line.append("%+.1f:%s" % [u, ("%.2f %s" % [h.position.y, h.collider.get_meta(&"surface", &"wall")]) if not h.is_empty() else "-"])
+		log_line("    s %.0f bank %.1f deg lift %.2f centre y %.2f | %s" % [sp, rad_to_deg(tr.bank_at(sp)), tr.lift_at(sp), xf.origin.y, " ".join(line)])
+	car.teleport(game.world.grid_pose())
+	game.laps.reset()
+	camera.snap_to_target()
+	await _frames(60)
+	log_line("    on the grid: wheels grounded %d, on surface %s" % [car.wheels_grounded, str(car.wheel_surface)])
+	# Autopilot laps.
+	var ap := Autopilot.new()
+	ap.car = car
+	ap.track = tr
+	add_child(ap)
+	var lean_max := 0.0
+	var air := 0
+	var shot_done := false
+	var laps: Array[float] = []
+	game.laps.lap_completed.connect(func(t: float) -> void: laps.append(t))
+	for i in 120 * 40:
+		await _frames(1)
+		var s := fposmod(game.laps.progress, tr.length)
+		if absf(tr.bank_at(s)) > 0.2:
+			lean_max = maxf(lean_max, rad_to_deg(acos(clampf(car.global_basis.y.dot(Vector3.UP), -1.0, 1.0))))
+			if not shot_done:
+				shot_done = true
+				game.set_chase_view(true)
+				await _frames(5)
+				await _shot("81_%s_banked_chase.png" % other)
+				game.set_chase_view(false)
+				await _frames(2)
+				await _shot("81_%s_banked_iso.png" % other)
+		if car.wheels_grounded == 0:
+			air += 1
+		if i % 480 == 0:
+			log_line("      t %.0f s: s %.1f, speed %.1f, grounded %d, upright %s, lateral %.2f" % [i / 120.0, s, car.forward_speed, car.wheels_grounded, car.is_upright(), tr.lateral_offset(car.global_position, s)])
+		if laps.size() >= 2:
+			break
+	_stop_line(ap)
+	log_line("    autopilot: laps %s, max lean on the banking %.0f deg, frames in the air %d" % [str(laps.map(func(t: float) -> String: return LapTimer.fmt(t))), lean_max, air])
+	_m["track2 autopilot"] = "laps %s, lean %.0f, air %d" % [str(laps.map(func(t: float) -> String: return LapTimer.fmt(t))), lean_max, air]
+	# Reel driver and the level-5 opponent, each from the grid.
+	car.teleport(game.world.grid_pose())
+	game.laps.reset()
+	await _frames(30)
+	var d := DemoDriver.new()
+	d.car = car
+	d.track = tr
+	d.rng_seed = 7
+	add_child(d)
+	var resets := 0
+	d.reset_requested.connect(func() -> void:
+		resets += 1
+		game.reset_car()
+		d.restart())
+	laps.clear()
+	for i in 120 * 40:
+		await _frames(1)
+		if laps.size() >= 2:
+			break
+	d.queue_free()
+	log_line("    reel driver: laps %s, resets %d" % [str(laps.map(func(t: float) -> String: return LapTimer.fmt(t))), resets])
+	_m["track2 reel driver"] = "laps %s, resets %d" % [str(laps.map(func(t: float) -> String: return LapTimer.fmt(t))), resets]
+	var opp := _opp_on(5)
+	_park_player()
+	await _frames(120 * 30)
+	log_line("    opponent L5, 30 s: %s, resets %d" % [opp.status_text(), opp.resets])
+	_m["track2 opponent L5"] = "resets %d" % opp.resets
+	_opp_off()
+	car.freeze = false
+	# Back to track 1 and leaks.
+	game.set_track(Tracks.DEFAULT_ID)
+	car.teleport(game.world.grid_pose())
+	camera.snap_to_target()
+	await _frames(30)
+	var nodes1 := get_tree().get_node_count()
+	for i in 3:
+		game.set_track(other)
+		await _frames(2)
+		game.set_track(Tracks.DEFAULT_ID)
+		await _frames(2)
+	await _frames(30)
+	var nodes2 := get_tree().get_node_count()
+	log_line("  nodes: before %d, after a visit %d, after three more round trips %d" % [nodes0, nodes1, nodes2])
+	_m["track switching nodes"] = "%d / %d / %d" % [nodes0, nodes1, nodes2]
+	car.teleport(game.world.grid_pose())
+	game.laps.reset()
+	camera.snap_to_target()
+	await _frames(30)
+
+
+
+## The player's view switch: an eased dolly-zoom between the iso and chase
+## cameras. Frames during the move, the weight's shape (monotonic, no
+## overshoot), a reversal mid-move, and the right camera at the end.
+func _test_camera_blend() -> void:
+	log_line("\n[camera blend] iso -> chase -> iso, and a reversal")
+	game.set_chase_view(false)
+	_place_on_track(40.0, 0.0, 6.0)
+	await _frames(2)
+	camera.snap_to_target()
+	var ap := _start_line(7.0)
+	await _frames(60)
+	var vb: ViewBlend = game.view_blend
+	for leg: Array in [["to_chase", true], ["to_iso", false]]:
+		game.blend_view(leg[1])
+		var ws: PackedFloat32Array = []
+		var ds: PackedFloat32Array = []
+		var n := 0
+		while vb.active and n < 200:
+			await get_tree().process_frame
+			ws.append(vb.weight)
+			ds.append(vb.global_position.distance_to(car.global_position))
+			if n % 9 == 0:
+				await _shot("84_blend_%s_%02d.png" % [leg[0], n / 9])
+			n += 1
+		var mono := true
+		for i in range(1, ws.size()):
+			if (ws[i] - ws[i - 1]) * (1.0 if leg[1] else -1.0) < -1e-6:
+				mono = false
+		var cur := renderer.scene_viewport.get_camera_3d()
+		log_line("  %s: %d frames (%.2f s), weight monotonic %s, camera distance %.1f .. %.1f (first %.1f, last %.1f), current at the end %s" % [
+			leg[0], n, n / 120.0, mono, Array(ds).min(), Array(ds).max(), ds[0], ds[ds.size() - 1], cur.name])
+		_m["blend " + leg[0]] = "%.2f s, monotonic %s, ends on %s" % [n / 120.0, mono, cur.name]
+		await _frames(30)
+	# Reverse mid-move.
+	game.blend_view(true)
+	for i in 30:
+		await get_tree().process_frame
+	var w_mid := vb.weight
+	game.blend_view(false)
+	var steps := 0
+	var w_prev := w_mid
+	var rev_ok := true
+	while vb.active and steps < 200:
+		await get_tree().process_frame
+		if vb.weight > w_prev + 1e-6:
+			rev_ok = false
+		w_prev = vb.weight
+		steps += 1
+	log_line("  reversed at weight %.2f: back to iso in %d frames, never moved forward again %s, current %s" % [w_mid, steps, rev_ok, renderer.scene_viewport.get_camera_3d().name])
+	_m["blend reverse"] = "at %.2f, %d frames, clean %s" % [w_mid, steps, rev_ok]
+	_stop_line(ap)
+	game.set_chase_view(false)
+	await _frames(10)
+
+
+
+## Times of day: each maps to its lighting mode, is saved per track, a track's
+## tweaks apply only on that track, and keys 1-9 switch modes while driving.
+func _test_time_of_day() -> void:
+	log_line("\n[time of day] modes, per-track saving, tweaks, keys")
+	var lt: Lighting = game.lighting
+	var parts := PackedStringArray()
+	for t: String in LevelSelect.TIMES:
+		game.apply_time_of_day(t)
+		await _frames(2)
+		parts.append("%s -> %d %s" % [t, lt.mode + 1, lt.mode_name()])
+	log_line("  " + ", ".join(parts))
+	var other: String = Tracks.ALL[1].id
+	game.audio.set_track_time(Tracks.DEFAULT_ID, "noon")
+	game.audio.set_track_time(other, "night")
+	log_line("  saved per track: %s %s, %s %s" % [Tracks.DEFAULT_ID, game.audio.track_time(Tracks.DEFAULT_ID), other, game.audio.track_time(other)])
+	game.apply_time_of_day("morning")
+	var az1: float = lt.sun_az
+	game.set_track(other)
+	game.apply_time_of_day("morning")
+	await _frames(2)
+	var az2: float = lt.sun_az
+	game.set_track(Tracks.DEFAULT_ID)
+	game.apply_time_of_day("morning")
+	await _frames(2)
+	log_line("  morning sun azimuth: %s %.0f, %s %.0f (tweaked), back on %s %.0f" % [Tracks.DEFAULT_ID, az1, other, az2, Tracks.DEFAULT_ID, lt.sun_az])
+	_m["time of day"] = "tweak %.0f -> %.0f -> %.0f" % [az1, az2, lt.sun_az]
+	# Keys while driving.
+	_place_on_track(40.0, 0.0, 6.0)
+	var ap := _start_line(7.0)
+	var keys := PackedStringArray()
+	var controls_were: bool = game.controls.enabled
+	game.controls.enabled = true
+	for k: Key in [KEY_8, KEY_9, KEY_2, KEY_1]:
+		_key(k, true)
+		await _frames(3)
+		_key(k, false)
+		await _frames(30)
+		keys.append("%s -> %s" % [OS.get_keycode_string(k), lt.mode_name()])
+	game.controls.enabled = controls_were
+	_stop_line(ap)
+	log_line("  keys while driving: " + ", ".join(keys))
+	_m["time keys"] = ", ".join(keys)
+	# (The reel's return to sunset on track 1 is checked by --attracttest.)
+	game.audio.set_track_time(Tracks.DEFAULT_ID, AudioDirector.DEFAULT_TIME)
+	game.audio.set_track_time(other, AudioDirector.DEFAULT_TIME)
+	await _frames(10)

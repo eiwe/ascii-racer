@@ -13,6 +13,10 @@ var camera: FollowCamera
 var chase: ChaseCamera
 var props: Node3D
 var lighting: Lighting
+## Which circuit is built (a Tracks definition); load_track() swaps it.
+var track_def: Dictionary = Tracks.FIGURE_EIGHT
+
+signal track_changed
 ## The finish gate over the start line (a static body).
 var gate: StaticBody3D
 
@@ -20,17 +24,9 @@ var gate: StaticBody3D
 
 func _ready() -> void:
 	_build_environment()
-	track = Track.new()
-	track.name = "Track"
-	add_child(track)
-	props = Node3D.new()
-	props.name = "Props"
-	add_child(props)
-	_build_props()
+	_build_track()
 	car = CAR_SCENE.instantiate() as Car
 	add_child(car)
-	lighting.set_ground(track.get_node("Ground") as GeometryInstance3D)
-	lighting.add_surfaces(track)
 	lighting.car = car
 	car.global_transform = grid_pose()
 	camera = FollowCamera.new()
@@ -46,7 +42,39 @@ func _ready() -> void:
 
 ## Where the car starts: on the centre line, behind the start line.
 func grid_pose() -> Transform3D:
-	return track.pose_at(Track.START_S - GRID_BACK)
+	return track.pose_at(track.start_s - GRID_BACK)
+
+
+## The circuit, its scenery and their lighting registration.
+func _build_track() -> void:
+	track = Track.new()
+	track.name = "Track"
+	track.def = track_def
+	add_child(track)
+	props = Node3D.new()
+	props.name = "Props"
+	add_child(props)
+	_build_props()
+	lighting.tweaks = track_def.get("time_tweaks", {})
+	lighting.set_ground(track.get_node("Ground") as GeometryInstance3D)
+	lighting.add_surfaces(track)
+
+
+## Swaps the circuit for another (the car stays; Game puts it on the grid).
+## Returns false if it is already this one.
+func load_track(def: Dictionary) -> bool:
+	if def.id == track_def.id and track != null:
+		return false
+	track_def = def
+	lighting.clear_surfaces()
+	for n: Node in [track, props]:
+		remove_child(n)
+		n.free()
+	gate = null
+	_build_track()
+	lighting.set_mode(lighting.mode) # the new materials take the mode's look
+	track_changed.emit()
+	return true
 
 
 # Environment and sun: see Lighting (shared with the demo scene).
@@ -120,8 +148,9 @@ func _build_props() -> void:
 	# whole road is open between them. Each leg is solid up to LEG_SOLID_HEIGHT:
 	# its collider is the convex hull of its own mesh there, so what you see is
 	# what you hit, and a car sliding along it meets smooth faces, not box corners.
-	var gate_pos := track.point_at(Track.START_S)
-	var t := track.tangent_at(Track.START_S)
+	var theme: Dictionary = track_def.get("theme", {})
+	var gate_pos := track.point_at(track.start_s)
+	var t := track.tangent_at(track.start_s)
 	var half := Track.ROAD_HALF_WIDTH + 0.02
 	gate = _static_prop("gate-finish", gate_pos, rad_to_deg(atan2(t.x, t.z)), Vector3(half / GATE_LEG_INNER, 1.6, 1.6), null, Vector3.ZERO)
 	var inv := gate.global_transform.affine_inverse()
@@ -161,8 +190,15 @@ func _build_props() -> void:
 
 	# Trees: a seeded scatter over the area round the circuit, kept well clear
 	# of the road (and of the gate).
+	_build_trees(theme, gate_pos)
+	_build_cones(theme)
+
+
+func _build_trees(theme: Dictionary, gate_pos: Vector3) -> void:
+	if not theme.get("trees", true):
+		return
 	var rng := RandomNumberGenerator.new()
-	rng.seed = TREE_SEED
+	rng.seed = theme.get("tree_seed", TREE_SEED)
 	var area := track.bounds.grow(9.0)
 	var clear := Track.ROAD_HALF_WIDTH + Track.KERB_WIDTH + TREE_CLEARANCE
 	var step := 3.4
@@ -180,8 +216,13 @@ func _build_props() -> void:
 			add_tree(p, pine, sc)
 		x += step
 
-	# Cones: just inside the apexes of the tight corners, and a pair beside the
-	# east straight (the drive test runs through those).
+
+
+## Cones: just inside the apexes of the tight corners, and on track 1 a pair
+## beside the east straight (the drive test runs through those).
+func _build_cones(theme: Dictionary) -> void:
+	if not theme.get("cones", true):
+		return
 	var edge := Track.ROAD_HALF_WIDTH + Track.KERB_WIDTH + 0.35
 	for c in corner_apexes(1.0 / 6.5):
 		var s: float = c[0]
@@ -189,8 +230,9 @@ func _build_props() -> void:
 		for ds: float in [-0.5, 0.5]:
 			var xf := track.pose_at(s + ds, side * edge)
 			add_cone(xf.origin)
-	for s: float in CONE_PAIR_S:
-		add_cone(track.pose_at(s, -edge).origin)
+	if track_def.id == Tracks.FIGURE_EIGHT.id:
+		for s: float in CONE_PAIR_S:
+			add_cone(track.pose_at(s, -edge).origin)
 
 
 ## Arc lengths along the east straight of the two cones beside it (outside, left).

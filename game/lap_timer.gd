@@ -31,11 +31,12 @@ func _init(t: Track) -> void:
 ## Call every physics step with the car position.
 func update(pos: Vector3, delta: float) -> void:
 	progress = track.progress(pos, progress)
-	var rel := fposmod(progress - Track.START_S, track.length)
+	var rel := fposmod(progress - track.start_s, track.length)
 	if started:
 		current += delta
-	if next_checkpoint < CHECKPOINTS.size():
-		var cp := CHECKPOINTS[next_checkpoint] * track.length
+	var cps: Array = track.def.get("checkpoints", CHECKPOINTS)
+	if next_checkpoint < cps.size():
+		var cp: float = float(cps[next_checkpoint]) * track.length
 		if rel >= cp and rel < cp + WINDOW:
 			next_checkpoint += 1
 	if _prev_rel >= 0.0 and _prev_rel > track.length - WINDOW and rel < WINDOW:
@@ -50,7 +51,7 @@ func _cross_line() -> void:
 		current = 0.0
 		next_checkpoint = 0
 		return
-	if next_checkpoint < CHECKPOINTS.size():
+	if next_checkpoint < (track.def.get("checkpoints", CHECKPOINTS) as Array).size():
 		return
 	last = current
 	if best < 0.0 or last < best:

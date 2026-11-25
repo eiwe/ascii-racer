@@ -1,6 +1,6 @@
 ## Render-setting keys and the HUD panel for an AsciiRenderer, shared by scenes.
 ##
-## Keys: 1-7 mode (emitted as `mode_requested`; the scene decides what a mode
+## Keys: 1-9 mode (emitted as `mode_requested`; the scene decides what a mode
 ## is, e.g. lighting), [ ] squeeze, ; ' vertical squeeze, - = glyph size,
 ## , . zoom (emitted as `zoom_requested`, the scene owns its camera), C colour,
 ## B bg tint, Tab raw 3D, H hud, P screenshot. Scenes add their own lines to the
@@ -16,7 +16,7 @@ extends Node
 signal zoom_requested(step: int)
 ## The player changed the glyph size with - or = (the new size in px).
 signal glyph_size_changed(px: int)
-## Keys 1-7: index 0..6.
+## Keys 1-9: index 0..8.
 signal mode_requested(index: int)
 
 const SQUEEZE_STEP: float = 0.05
@@ -25,7 +25,7 @@ const HUD_FONT: Font = preload("res://assets/fonts/HackNerdFontMono-Regular.ttf"
 const LEGEND_TEXT: String = "H  debug menu"
 const LEGEND_COLOR: Color = Color(0.72, 0.74, 0.8, 0.85)
 const LEGEND_BG: Color = Color(0.0, 0.0, 0.0, 0.6)
-const KEYS_HELP: String = """1-7 mode   [ ] squeeze   ; ' v-squeeze
+const KEYS_HELP: String = """1-9 mode   [ ] squeeze   ; ' v-squeeze
 - = glyph size   , . zoom   C colour   B bg tint
 Tab raw 3D   H hud   P screenshot"""
 
@@ -36,7 +36,7 @@ Tab raw 3D   H hud   P screenshot"""
 var status_text: String = ""
 ## Scene-specific key help shown at the bottom of the panel.
 var keys_text: String = ""
-## Name of the scene's current mode (keys 1-7), shown at the top of the settings.
+## Name of the scene's current mode (keys 1-9), shown at the top of the settings.
 var mode_text: String = ""
 
 ## False hides the legend (the scene's own reasons: a title sequence, a menu).
@@ -153,7 +153,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	var s := renderer.settings
 	match k.keycode:
-		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7:
+		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9:
 			mode_requested.emit(k.keycode - KEY_1)
 		KEY_BRACKETLEFT:
 			set_squeeze(s.squeeze_x - SQUEEZE_STEP, s.squeeze_y - SQUEEZE_STEP)

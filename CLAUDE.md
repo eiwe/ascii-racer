@@ -4,7 +4,7 @@ Godot 4.7 project (Forward+, Jolt, GDScript with tabs and static types). `README
 
 ## Running and testing
 
-- Run: `godot --path .` (main scene `game/game.tscn`). It opens on the demo reel; add `-- --play` to start on the grid. Renderer demo: `godot --path . res://demo/demo.tscn`.
+- Run: `godot --path .` (main scene `game/game.tscn`). It opens on the demo reel (any key: the level select, Enter: the grid); add `-- --play` to start on the grid of the saved circuit, with `--track=<id>` and `--time=<morning|noon|night>` to pick them. Renderer demo: `godot --path . res://demo/demo.tscn`.
 - `--headless` does not render. Anything that checks output needs a real window; make every run self-quitting and wrap it in `timeout`.
 - The game has sound and the owner hears every run. Pass `--audio-driver Dummy` (before `--path`) on any scripted run that does not need real audio output.
 - Isometric camera changes: run `--dtonly=camera_motion,view_ahead` and compare before and after; the owner found AUTO's earlier motion nauseating, so keep camera acceleration, jerk and the car's speed on screen at or below the current numbers. At 21:9 and wider, and with the fixed zoom steps, the camera must stay exactly as it is.
@@ -20,6 +20,7 @@ Godot 4.7 project (Forward+, Jolt, GDScript with tabs and static types). `README
 ## Things that have gone wrong before
 
 - A headless `godot --import` once re-imported `assets/kenney_toy-car-kit/Textures/colormap.png` as VRAM-compressed, which changed every model's colours. Its `.import` must stay lossless (`compress/mode=0`, `detect_3d/compress_to=0`). Check `git diff -- '*.import'` after any headless run.
+- Circuits are data (`game/tracks.gd`); Figure Eight must drive exactly as before, so asphalt and the off-track ground keep the car's own tunables (`game/surfaces.gd`) and every banking or surface rule must reduce to the old code when the bank is 0 and the surface is asphalt. Check with the drive test against a saved run (all summary values identical), plus `--dtonly=tracks` for the other circuits (laps by the autopilot and the reel driver, opponent resets, no node leaks). The reel always runs on Figure Eight in sunset. Per-circuit settings (time of day, opponent, best lap) live in `[track.<id>]` sections of the audio settings file; tests pass `--audiosettings=<scratch>`.
 - The default look (`AsciiSettings` defaults, lighting mode 1 "sunset", track colours) was chosen by the owner. Do not change it as a side effect of other work. Sunset became the default by the owner's choice; "classic" (mode 3) is no longer the default but stays the byte-identity reference.
 - Hiding scenery so the camera can see the car reads as a rendering bug. Brief occlusion is acceptable; for longer occlusion use the halo (`game/halo_occluder.gd`): give the occluding meshes the halo material and they get a round opening around the car.
 - `RenderingServer.global_shader_parameter_get()` is editor-only; calling it at runtime raises an error that aborts the calling function.

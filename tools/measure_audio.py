@@ -106,6 +106,8 @@ def main():
             lay.append(f"rpm {min(float(r['rpm']) for r in rs):.0f}-{g('rpm'):.0f} gears {gears[0]}-{gears[-1]}")
             if g("squeal") > 0.05: lay.append(f"squeal {g('squeal'):.2f}")
             if g("skid") > 0.05: lay.append(f"skid {g('skid'):.2f}")
+            if "dirt_roll" in rs[0] and g("dirt_roll") > 0.05: lay.append(f"dirt roll {g('dirt_roll'):.2f}")
+            if "dirt_slide" in rs[0] and g("dirt_slide") > 0.05: lay.append(f"dirt slide {g('dirt_slide'):.2f}")
             if g("nitro") > 0.05: lay.append(f"nitro {g('nitro'):.2f}")
             ev = " ".join(r["events"] for r in rs if r["events"])
             if ev: lay.append("events: " + ev)

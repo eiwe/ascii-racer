@@ -236,6 +236,10 @@ func _sync_twins() -> void:
 	for k: Variant in _gbuffer_twins.keys():
 		if not is_instance_valid(k):
 			_gbuffer_twins.erase(k)
+	# Lights must not reach the twins: a shadowed light that does left the whole
+	# g-buffer empty (the night headlights made every cell read as sky).
+	for l: Light3D in scene_viewport.find_children("*", "Light3D", true, false):
+		l.light_cull_mask &= ~GBUFFER_LAYER
 	for mi: MeshInstance3D in scene_viewport.find_children("*", "MeshInstance3D", true, false):
 		if _gbuffer_twins.has(mi) or mi.layers & (GBUFFER_LAYER | LIGHT_LAYER) \
 				or mi.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY:

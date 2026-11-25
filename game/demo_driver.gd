@@ -45,6 +45,8 @@ const DRIFT_CURVATURE: float = 0.18
 var drift_chance_other: float = 0.4
 ## Whether the hairpin is taken with the handbrake drift.
 var drift_hairpin: bool = true
+## Ride over jumps that have a roll speed instead of clearing them (careful levels).
+var roll_jumps: bool = false
 ## Hand steadiness: amplitude of the line's wobble (units), and the lap-to-lap
 ## spread of corner speed and braking (multipliers, min..max).
 var wobble: float = 0.06
@@ -64,6 +66,18 @@ var drift_gain: float = 4.0
 var _flat_out: Array[Vector2] = []
 ## Body slip beyond which an unplanned slide is caught.
 const SLIDE_CATCH_DEG: float = 8.0
+## Off the line by more than this at a jump with a planned speed: roll it instead.
+const JUMP_LINE_TOLERANCE: float = 0.6
+## Loose surface (dirt): slides are part of driving it. The steering limit
+## allows this much more than the grip plan, a slide is caught only past
+## LOOSE_CATCH_DEG, with a softer counter-steer and yaw-rate damping.
+const LOOSE_STEER_MARGIN: float = 1.2
+## On banking the car turns tighter than the speed plan assumes (the plan is
+## kept cautious): the steering limit allows this much more there.
+const BANK_STEER_MARGIN: float = 1.4
+const LOOSE_CATCH_DEG: float = 14.0
+const LOOSE_CATCH_SPAN_DEG: float = 24.0
+const LOOSE_YAW_DAMP: float = 0.12
 ## Steering is capped at the angle that asks the tyres for this share of their
 ## grip at the current speed (a driver does not crank full lock at speed).
 var steer_grip_share: float = 0.95
@@ -177,7 +191,10 @@ func _find_corners() -> void:
 		while j < n and signf(track.curvature[j]) == signf(k) and absf(track.curvature[j]) >= DRIFT_CURVATURE:
 			turn += absf(track.curvature[j]) * ds
 			j += 1
-		_corners.append([i * ds, j * ds, signf(k), turn > deg_to_rad(150.0)])
+		# A banked turn is driven on the banking, never drifted.
+		var banked := track.bank_at((i + j) * 0.5 * ds) != 0.0
+		var loose := track.grip_at((i + j) * 0.5 * ds) < 1.0
+		_corners.append([i * ds, j * ds, signf(k), turn > deg_to_rad(150.0) and not banked, banked, loose and turn > deg_to_rad(80.0)])
 		i = j
 
 
@@ -189,7 +206,9 @@ func _new_lap() -> void:
 	_wobble_phase = _rng.randf() * TAU
 	_drift_plan.clear()
 	for c: Array in _corners:
-		_drift_plan.append(c[3] and drift_hairpin or _rng.randf() < drift_chance_other)
+		# Drifted: hairpins (and on a loose surface any tight flat corner) by the
+		# drivers that drift, others now and then; never a banked turn.
+		_drift_plan.append(not c[4] and ((c[3] or c[5]) and drift_hairpin or _rng.randf() < drift_chance_other))
 	_build_speed()
 
 
@@ -219,11 +238,17 @@ func _build_speed() -> void:
 		var c := pts[(i + 1) % n]
 		var k := _curvature(Vector2(a.x, a.z), Vector2(b.x, b.z), Vector2(c.x, c.z))
 		_speed[i] = minf(20.0, sqrt(_corner_accel(a_lat, i * ds) / maxf(k, 1e-4)))
+		# Jumps with planned take-off speeds (clear or roll them).
+		var js := track.jump_speed_at(i * ds, roll_jumps)
+		if js < INF:
+			_speed[i] = minf(_speed[i], js)
 	var decel := brake_accel * _lap_brake * grip
 	for pass_i in 2:
 		for j in range(n - 1, -1, -1):
 			var nxt := _speed[(j + 1) % n]
-			_speed[j] = minf(_speed[j], sqrt(nxt * nxt + 2.0 * decel * ds))
+			# Less grip (a loose surface), longer braking.
+			var g := track.grip_at(j * ds)
+			_speed[j] = minf(_speed[j], sqrt(nxt * nxt + 2.0 * (decel if g == 1.0 else decel * g) * ds))
 
 
 ## Cornering acceleration the plan allows at s (Track.corner_accel).
@@ -300,17 +325,35 @@ func _physics_process(delta: float) -> void:
 	var steer := clampf(err / lock * steer_gain, -1.0, 1.0)
 	if v > 1.0:
 		var a_max := car.grip_road * Car.G * minf(car.front_grip, car.rear_grip) * steer_grip_share
+		# What the road allows here: the surface's grip, and on banking more
+		# (as in the speed plan; exactly a_max on flat asphalt). A loose
+		# surface is driven with the tyres sliding a little.
+		var g := track.grip_at(progress)
+		a_max = track.corner_accel(a_max, progress)
+		if g < 1.0:
+			a_max *= LOOSE_STEER_MARGIN
+		if track.bank_at(progress) != 0.0:
+			a_max *= BANK_STEER_MARGIN
 		var cap := atan(WHEELBASE * a_max / (v * v)) / lock
 		steer = clampf(steer, -cap, cap)
 
 	# Speed: aim for the profile a little ahead (reaction time).
 	var want := minf(_speed_at(progress + maxf(v, 0.0) * 0.3), speed_cap)
+	# Badly off the line coming up to a jump with a planned speed: back off to
+	# the roll speed (taking off sideways lands off the road).
+	var s_jump := progress + maxf(v, 0.0) * 0.5
+	if track.jump_speed_at(s_jump, roll_jumps) < INF and not roll_jumps:
+		var n := _offset.size()
+		var f := fposmod(progress, track.length) / track.length * n
+		var line_lat := lerpf(_offset[int(f) % n], _offset[(int(f) + 1) % n], f - int(f)) * _lap_amp + lateral_bias
+		if absf(track.lateral_offset(pos, progress) - line_lat) > JUMP_LINE_TOLERANCE:
+			want = minf(want, track.jump_speed_at(s_jump, true))
 	var thr := clampf((want - v) * 1.6 + 0.15, 0.0, 1.0)
 	var brk := clampf((v - want - 0.25) * 0.9, 0.0, 1.0)
 	if lost:
 		want = 3.0
 		thr = clampf((want - v) * 1.5, 0.0, 0.7)
-	var flat := _in_flat_out(progress, 0.0)
+	var flat := _in_flat_out(progress, 0.0) and track.jump_speed_at(progress, roll_jumps) == INF
 	if flat:
 		thr = 1.0
 		brk = 0.0
@@ -337,6 +380,13 @@ func _physics_process(delta: float) -> void:
 				steer = dir * maxf(absf(steer), 0.5)
 			thr = clampf(0.85 - car.drift_angle * 0.6, 0.4, 1.0)
 			brk = 0.0
+	elif track.grip_at(progress) < 1.0:
+		# Loose surface: sliding is normal. Catch only a real slide, gently and
+		# damped by the yaw rate (a hard catch swapped ends on dirt).
+		if absf(car.slip_angle) > deg_to_rad(LOOSE_CATCH_DEG) and v > 1.5:
+			var yaw_rate := car.angular_velocity.dot(car.global_basis.y)
+			steer = clampf(steer + car.slip_angle / deg_to_rad(LOOSE_CATCH_SPAN_DEG) + yaw_rate * LOOSE_YAW_DAMP, -1.0, 1.0)
+			thr *= 0.5
 	elif absf(car.slip_angle) > deg_to_rad(SLIDE_CATCH_DEG) and v > 1.5:
 		# An unplanned slide (power oversteer, a kerb): counter-steer and ease off.
 		steer = clampf(steer + car.slip_angle / deg_to_rad(12.0), -1.0, 1.0)

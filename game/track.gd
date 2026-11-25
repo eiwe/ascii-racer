@@ -62,6 +62,23 @@ const COL_SIDE: Color = Color("63677e")
 const COL_UNDER: Color = Color("3f4250")
 const COL_PILLAR: Color = Color("525563")
 
+## Dirt arena style (a circuit whose theme has "arena": true): earth berms
+## instead of kerbs, a darker band along each road edge, jump mounds with earth
+## slopes instead of walls, and on banked turns a tall tyre wall on the outside
+## (square to the road, growing in with the banking) and a drivable apron
+## sloping down to the infield on the inside.
+const BERM_WIDTH: float = 0.5
+const BERM_HEIGHT: float = 0.09
+const EDGE_BAND: float = 1.08 ## |u| beyond which the road edge is shaded darker
+const BANK_WALL_HEIGHT: float = 1.15
+const BANK_WALL_THICK: float = 0.3
+const APRON_WIDTH: float = 1.3
+const COL_BERM: Color = Color("6e4a2c")
+const COL_MOUND: Color = Color("7a5232")
+const COL_TYRE: Color = Color("34343c")
+const COL_TYRE_BAND: Color = Color("d9d2bc")
+const COL_BOARD: Color = Color("5c5650") ## the banking wall's back (outside)
+
 ## Physics layers.
 const LAYER_SURFACE: int = 1 ## ground and road: what wheels stand on
 const LAYER_CAR: int = 2
@@ -81,6 +98,9 @@ var ELEVATION: Array:
 ## Start line of this circuit (START_S below is track 1's, kept for its tests).
 var start_s: float:
 	get: return def.start_s
+## Dirt arena style (see BERM_WIDTH).
+var arena: bool:
+	get: return def.get("theme", {}).get("arena", false)
 ## Base surface of the road.
 var surface: StringName:
 	get: return def.get("surface", Surfaces.ROAD)
@@ -337,7 +357,7 @@ func grip_at(s: float) -> float:
 
 ## Cornering acceleration a driver can plan for at s, given what it would
 ## plan on flat asphalt (`a_lat`): scaled by the surface's grip, and on banked
-## road more, as the road pushes the car round: g (mu + tan b) / (1 - mu tan b).
+## road more, as the road pushes the car round: g (mu + tan b).
 ## On flat asphalt it is exactly a_lat.
 func corner_accel(a_lat: float, s: float) -> float:
 	var g := grip_at(s)
@@ -345,9 +365,26 @@ func corner_accel(a_lat: float, s: float) -> float:
 	var b := absf(bank_at(s))
 	if b == 0.0:
 		return a
+	# The textbook g (mu + tan b) / (1 - mu tan b) promised far more than the
+	# car (raycast wheels, a stiff suspension) actually finds on the banking
+	# (the drivers planned 15 u/s and met the wall); the plain sum matches it
+	# (about 11.5 u/s round Dust Bowl's 26 deg turns on dirt).
 	var mu := a / Car.G
-	var tb := tan(b)
-	return Car.G * (mu + tb) / maxf(1.0 - mu * tb, 0.35)
+	return Car.G * (mu + tan(b))
+
+
+## Planned take-off speed for a jump covering s (from 2 before it), from the
+## circuit data: "clear_speed" (land on the landing slope) or with `roll`
+## "roll_speed" (ride over it). INF where there is none (drivers take such
+## jumps flat out, as on Figure Eight).
+func jump_speed_at(s: float, roll: bool) -> float:
+	for e: Dictionary in ELEVATION:
+		if not e.get("jump", false) or not e.has("clear_speed"):
+			continue
+		var s0: float = float(e.from) - 2.0
+		if fposmod(s - s0, length) <= float(e.to) - s0:
+			return float(e.roll_speed) if roll else float(e.clear_speed)
+	return INF
 
 
 ## Flat-out stretches (s ranges): over each jump, from a little before its
@@ -471,6 +508,47 @@ static func _profile(kind: int, ground: float, stripe: Color, kerbs: bool = true
 	return out
 
 
+## Arena cross-section for one row (see BERM_WIDTH). `ground` is the depth the
+## sides reach (below the ground under raised or banked road), `ground_row` the
+## ground's height relative to the row's centre, `roll` the row's banking and
+## `roll_mid` the segment's (which picks the shape, so both rows of a segment
+## have the same strips).
+func _arena_profile(kind: int, ground: float, ground_row: float, roll: float, roll_mid: float, stripe: Color) -> Array:
+	var h := ROAD_HALF_WIDTH
+	var road := [
+		[Vector2(-h, 0.0), Vector2(-LINE_OUT, 0.0), Vector2(-LINE_IN, 0.0), Vector2(LINE_IN, 0.0), Vector2(LINE_OUT, 0.0), Vector2(h, 0.0)],
+		[COL_ASPHALT, COL_LINE, COL_ASPHALT, COL_LINE, COL_ASPHALT], "road", false]
+	if roll_mid != 0.0:
+		var o := signf(roll_mid) # the raised (outer) side
+		var full := clampf(absf(roll) / deg_to_rad(14.0), 0.0, 1.0)
+		var wh := lerpf(BERM_HEIGHT, BANK_WALL_HEIGHT, full * full * (3.0 - 2.0 * full))
+		var t := BANK_WALL_THICK
+		var band := COL_TYRE_BAND if stripe == COL_WHITE else COL_TYRE
+		# Apron end: APRON_WIDTH further in, level with the ground (world frame
+		# offsets converted into the rolled cross-section's u / v).
+		var xw := -o * (h + APRON_WIDTH)
+		var yw := ground_row + 0.004
+		var ua := xw * cos(roll) + yw * sin(roll)
+		var va := -xw * sin(roll) + yw * cos(roll)
+		if o > 0.0:
+			var apron := [[Vector2(ua, va), Vector2(-h, 0.0)], [COL_BERM], "road", false]
+			var wall := [[Vector2(h, 0.0), Vector2(h, wh), Vector2(h + t, wh), Vector2(h + t, ground)], [band, COL_TYRE_BAND, COL_BOARD], "wall", false]
+			return [apron, road, wall]
+		var apron2 := [[Vector2(h, 0.0), Vector2(ua, va)], [COL_BERM], "road", false]
+		var wall2 := [[Vector2(-h - t, ground), Vector2(-h - t, wh), Vector2(-h, wh), Vector2(-h, 0.0)], [COL_BOARD, COL_TYRE_BAND, band], "wall", false]
+		return [wall2, road, apron2]
+	if kind == 0:
+		var b := BERM_WIDTH
+		var left := [[Vector2(-h - b, ground), Vector2(-h - b * 0.45, BERM_HEIGHT), Vector2(-h, 0.0)], [COL_BERM, COL_BERM], "road", false]
+		var right := [[Vector2(h, 0.0), Vector2(h + b * 0.45, BERM_HEIGHT), Vector2(h + b, ground)], [COL_BERM, COL_BERM], "road", false]
+		return [left, road, right]
+	# A jump: earth slopes down from the road edges (drivable, about 40 deg).
+	var d := -ground * 1.2 + 0.1
+	var lm := [[Vector2(-h - d, ground), Vector2(-h - 0.08, -0.01), Vector2(-h, 0.0)], [COL_MOUND, COL_MOUND], "road", false]
+	var rm := [[Vector2(h, 0.0), Vector2(h + 0.08, -0.01), Vector2(h + d, ground)], [COL_MOUND, COL_MOUND], "road", false]
+	return [lm, road, rm]
+
+
 func _build_road() -> void:
 	var road_faces := PackedVector3Array()
 	var wall_faces := PackedVector3Array()
@@ -478,6 +556,7 @@ func _build_road() -> void:
 	var main := _MeshData.new()
 	var raised := _MeshData.new() # ramps and the jump: can hide the car, so it gets the halo
 	var deck := _MeshData.new()
+	var bank_walls := _MeshData.new() # arena: the tall walls on banked turns (no shadows)
 	var n := roundi(length / MESH_STEP)
 	var ds := length / n
 	var rows: Array = [] # per row: [centre, right]
@@ -506,8 +585,15 @@ func _build_road() -> void:
 		# Banked: the sides reach down past the ground under the raised outer edge.
 		var deep_a := 2.0 * (ROAD_HALF_WIDTH + WALL_THICK) * absf(sin(bank_at(j * ds)))
 		var deep_b := 2.0 * (ROAD_HALF_WIDTH + WALL_THICK) * absf(sin(bank_at((j + 1) * ds)))
-		var pa := _profile(kind, minf(ga, -0.002) - deep_a, stripe, kerbs)
-		var pb := _profile(kind, minf(gb, -0.002) - deep_b, stripe, kerbs)
+		var pa: Array
+		var pb: Array
+		if arena:
+			var roll_mid := bank_at(s_mid)
+			pa = _arena_profile(kind, minf(ga, -0.002) - deep_a, ga, bank_at(j * ds), roll_mid, stripe)
+			pb = _arena_profile(kind, minf(gb, -0.002) - deep_b, gb, bank_at((j + 1) * ds), roll_mid, stripe)
+		else:
+			pa = _profile(kind, minf(ga, -0.002) - deep_a, stripe, kerbs)
+			pb = _profile(kind, minf(gb, -0.002) - deep_b, stripe, kerbs)
 		_apply_surfaces(pa, pb, s_mid)
 		for k in pa.size():
 			var strip_a: Array = pa[k]
@@ -516,6 +602,10 @@ func _build_road() -> void:
 			var pts_b: Array = strip_b[0]
 			var cols: Array = strip_a[1]
 			var target := deck if strip_a[3] else (raised if kind != 0 else main)
+			if arena:
+				# Only the tall banking walls can hide a car: they alone get the
+				# halo; the banked road, mounds and berms are plain road.
+				target = bank_walls if strip_a[2] == "wall" and bank_at(s_mid) != 0.0 else main
 			var faces := road_faces if strip_a[2] == "road" else wall_faces
 			var span_surf: Array = strip_a[4] if strip_a.size() > 4 else []
 			for m in pts_a.size() - 1:
@@ -533,7 +623,7 @@ func _build_road() -> void:
 					surface_faces[span_surf[m]] = faces
 		# Wall ends where a raised stretch starts or stops (next to the kerbs).
 		var kind_next := structure_at((j + 1.5) * ds)
-		if (kind == 0) != (kind_next == 0):
+		if (kind == 0) != (kind_next == 0) and not arena:
 			var row: Array = b
 			var fwd := ((rows[(j + 2) % rows.size()][0] as Vector3) - (a[0] as Vector3)).normalized()
 			var facing := -fwd if kind == 0 else fwd # toward the kerbs
@@ -591,6 +681,14 @@ func _build_road() -> void:
 	# camera and the car is an occluder with a see-through halo.
 	HaloOccluder.add_occluder(self, "Raised", raised.mesh(mat), TRACK_TINT)
 	deck_mesh = HaloOccluder.add_occluder(self, "Deck", deck.mesh(mat), TRACK_TINT)
+	if arena:
+		# The banking walls are tall: their shadow would black out the turn
+		# under a low sun, so they cast none.
+		HaloOccluder.add_occluder(self, "BankWalls", bank_walls.mesh(mat), TRACK_TINT)
+		var sh := get_node_or_null("BankWallsShadow")
+		if sh != null:
+			remove_child(sh)
+			sh.free()
 	HaloOccluder.add_occluder(self, "Pillars", pillars.mesh(mat), TRACK_TINT)
 
 	track_body = _static_body("TrackBody", LAYER_SURFACE, road_faces)
@@ -599,6 +697,13 @@ func _build_road() -> void:
 		var b := _static_body("TrackBody_" + String(sid), LAYER_SURFACE, surface_faces[sid])
 		b.set_meta("surface", sid)
 	structure_body = _static_body("StructureBody", LAYER_PROPS, wall_faces)
+	if arena:
+		# The banking walls: a car that touches one slides along it rather
+		# than being braked and spun round (default friction stopped a car dead).
+		var pm := PhysicsMaterial.new()
+		pm.friction = 0.05
+		pm.bounce = 0.0
+		structure_body.physics_material_override = pm
 
 
 ## Road colour and splits for this row's surfaces: with a base surface other
@@ -616,7 +721,7 @@ func _apply_surfaces(pa: Array, pb: Array, s_mid: float) -> void:
 					or absf((pts0[5] as Vector2).x - ROAD_HALF_WIDTH) > 0.001:
 				continue # not the road strip (a kerb)
 			var us: Array = [-ROAD_HALF_WIDTH, -LINE_OUT, -LINE_IN, LINE_IN, LINE_OUT, ROAD_HALF_WIDTH] if surface == Surfaces.ROAD \
-					else [-ROAD_HALF_WIDTH, ROAD_HALF_WIDTH]
+					else ([-ROAD_HALF_WIDTH, -EDGE_BAND, EDGE_BAND, ROAD_HALF_WIDTH] if arena else [-ROAD_HALF_WIDTH, ROAD_HALF_WIDTH])
 			for p: Dictionary in patches:
 				if fposmod(s_mid - float(p.from), length) > float(p.to) - float(p.from):
 					continue
@@ -637,7 +742,8 @@ func _apply_surfaces(pa: Array, pb: Array, s_mid: float) -> void:
 				if sid == Surfaces.ROAD:
 					cols.append(COL_LINE if absf(mid) > LINE_IN and absf(mid) < LINE_OUT else COL_ASPHALT)
 				else:
-					cols.append(Surfaces.get_value(sid, "colour", COL_ASPHALT))
+					var col: Color = Surfaces.get_value(sid, "colour", COL_ASPHALT)
+					cols.append(col.darkened(0.3) if arena and absf(mid) > EDGE_BAND else col)
 			strip[0] = pts
 			strip[1] = cols
 			strip.append(surfs)

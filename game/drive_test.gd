@@ -54,6 +54,10 @@ func _ready() -> void:
 	game.tuning.save_path = out_dir.path_join("car_tuning.cfg")
 	game.countdown_enabled = false # the countdown scenario turns it on for itself
 	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--dttrack="):
+			# Run the scenarios on another circuit (those that only make sense
+			# on Figure Eight still assume it).
+			game.set_track(arg.trim_prefix("--dttrack="))
 		if arg.begins_with("--camtune="):
 			for kv in arg.trim_prefix("--camtune=").split(",", false):
 				var p := kv.split("=")
@@ -165,7 +169,7 @@ func _run() -> void:
 		if arg.begins_with("--dtonly="):
 			only = arg.trim_prefix("--dtonly=")
 	for t: String in ["spawn", "accel_brake", "corners", "limit", "nitro", "nitro_shots", "turns", "handbrake", "drift", "feel", "offroad", "kerbs", "tree", "cones", "jump", "bridge", "reset_bridge", "keys",
-			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting", "level_select", "tracks", "camera_blend", "time_of_day"]:
+			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting", "level_select", "tracks", "camera_blend", "time_of_day", "dirt_feel", "dust_tour", "abuse", "opp_trace"]:
 		if only == "" or t in only.split(","):
 			await call("_test_" + t)
 	log_line("\n[summary] preset %s" % game.tuning.current)
@@ -2614,6 +2618,18 @@ func _pursuit_steer(hint: float) -> float:
 	return clampf(err / maxf(car.steer_lock, deg_to_rad(4.0)) * 1.3, -1.0, 1.0)
 
 
+## Pure pursuit toward a line `lat` off the centre.
+func _pursuit_steer_lat(hint: float, lat: float) -> float:
+	var v := maxf(car.forward_speed, 0.0)
+	var target := track.pose_at(hint + 0.9 + 0.22 * v, lat).origin
+	var to := target - car.global_position
+	to.y = 0.0
+	var fwd := -car.global_basis.z
+	fwd.y = 0.0
+	var err := fwd.signed_angle_to(to, Vector3.DOWN)
+	return clampf(err / maxf(car.steer_lock, deg_to_rad(4.0)) * 1.3, -1.0, 1.0)
+
+
 ## The limit: the same overcooked entry into a corner with (a) no correction
 ## (keeps aiming at the line, throttle held), (b) a human-like catch (after a
 ## 0.2 s reaction delay once the slide passes 10 deg: counter-steer with the
@@ -2915,7 +2931,7 @@ func _test_audio() -> void:
 	log_line("\n[audio] scenarios for the recording (see 70_audio_*.csv)")
 	var ca: CarAudio = game.car_audio
 	var au: AudioDirector = game.audio
-	var rows := PackedStringArray(["frame,scenario,rpm,gear,load,squeal,skid,nitro,speed,master_peak_db,music_peak_db,sfx_peak_db,w0,w1,w2,p0,p1,p2,events"])
+	var rows := PackedStringArray(["frame,scenario,rpm,gear,load,squeal,skid,nitro,speed,master_peak_db,music_peak_db,sfx_peak_db,w0,w1,w2,p0,p1,p2,events,dirt_roll,dirt_slide"])
 	var segs := PackedStringArray(["scenario,first_frame,last_frame"])
 	var state := {"scn": "", "frame": 0, "first": 0, "ev": 0}
 	var rec := func() -> void:
@@ -2927,12 +2943,12 @@ func _test_audio() -> void:
 			var e: Array = ca.events[state.ev]
 			ev.append("%s:%.2f" % [e[1], e[2]])
 			state.ev += 1
-		rows.append("%d,%s,%.1f,%d,%.2f,%.3f,%.3f,%.2f,%.2f,%.1f,%.1f,%.1f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%s" % [state.frame, state.scn, ca.rpm, ca.gear, ca.load,
+		rows.append("%d,%s,%.1f,%d,%.2f,%.3f,%.3f,%.2f,%.2f,%.1f,%.1f,%.1f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%s,%.3f,%.3f" % [state.frame, state.scn, ca.rpm, ca.gear, ca.load,
 			ca.squeal, ca.skid, car.nitro_level, car.linear_velocity.length(),
 			AudioServer.get_bus_peak_volume_left_db(0, 0), AudioServer.get_bus_peak_volume_left_db(AudioServer.get_bus_index("Music"), 0),
 			AudioServer.get_bus_peak_volume_left_db(AudioServer.get_bus_index("SFX"), 0),
 			w[0] if w.size() > 0 else 0.0, w[1] if w.size() > 1 else 0.0, w[2] if w.size() > 2 else 0.0,
-			pz[0] if pz.size() > 0 else 0.0, pz[1] if pz.size() > 1 else 0.0, pz[2] if pz.size() > 2 else 0.0, " ".join(ev)])
+			pz[0] if pz.size() > 0 else 0.0, pz[1] if pz.size() > 1 else 0.0, pz[2] if pz.size() > 2 else 0.0, " ".join(ev), ca.dirt_roll, ca.dirt_slide])
 	get_tree().process_frame.connect(rec)
 	var seg := func(name: String) -> void:
 		if state.scn != "":
@@ -3034,6 +3050,30 @@ func _test_audio() -> void:
 	game.pause_menu.close()
 	seg.call("resumed")
 	await _frames(120)
+	# Loose surface: open ground set to dirt, against the same ground set to asphalt.
+	var gb: StaticBody3D = (game.track as Track).ground_body
+	var field: Vector3 = (game.track as Track).bounds.end + Vector3(30.0, 0.0, 30.0) # open ground
+	for surf: StringName in [&"road", &"dirt"]:
+		gb.set_meta(&"surface", surf)
+		var tag := "asphalt" if surf == &"road" else "dirt"
+		await _place(field, Vector3.RIGHT, 6.0)
+		seg.call("%s_cruise" % tag)
+		for i in 120 * 2:
+			_inputs(0.0, 1.0, 0.0, false)
+			await _frames(1)
+		await _place(field, Vector3.RIGHT, 7.5)
+		seg.call("%s_slide" % tag)
+		for i in 120 * 3:
+			_inputs(0.75, 1.0, 0.0, false)
+			await _frames(1)
+		await _place(field, Vector3.RIGHT, 6.5)
+		seg.call("%s_drift" % tag)
+		for i in 120 * 3:
+			_inputs(1.0 if i < 30 else 0.7, 1.0, 0.0, i < 40)
+			await _frames(1)
+		_inputs(0.0, 0.0, 1.0, false)
+		await _frames(90)
+	gb.set_meta(&"surface", &"ground")
 	# The reel's mix: menu music, the car under it.
 	au.forced_context = AudioDirector.Context.MENU
 	au.forced_track = "menu"
@@ -3285,7 +3325,7 @@ func _test_opp_laps() -> void:
 ## and across the hairpin exit. The opponent comes from behind at speed.
 func _test_opp_block() -> void:
 	log_line("\n[opponent blocked] the player's car parked in the way; does the opponent get past (or recover) and carry on?")
-	for c: Array in [["on the line, main straight", 16.0, 0.0, 0.0], ["across the hairpin exit", 129.0, -0.2, 90.0]]:
+	for c: Array in track.def.get("tests", {}).get("block", [["on the line, main straight", 16.0, 0.0, 0.0], ["across the hairpin exit", 129.0, -0.2, 90.0]]):
 		for level: int in [2, 5]:
 			var opp := _opp_on(level)
 			var s: float = c[1]
@@ -3327,7 +3367,7 @@ func _test_opp_block() -> void:
 ## speed; how long until it is back on the road making progress?
 func _test_opp_shove() -> void:
 	log_line("\n[opponent shoved] a sideways hit at speed on the main straight and in the S")
-	for c: Array in [["main straight", 14.0], ["the S", 64.0]]:
+	for c: Array in track.def.get("tests", {}).get("shove", [["main straight", 14.0], ["the S", 64.0]]):
 		var opp := _opp_on(3)
 		_park_player()
 		var s0: float = c[1] - 10.0
@@ -4313,23 +4353,54 @@ func _test_glyph_setting() -> void:
 ## The level select on each track and time of day at 16:9 and 21:9, a track
 ## change through its wipe, and back.
 func _test_level_select() -> void:
-	log_line("\n[level select] screenshots per time of day and output shape")
+	log_line("\n[level select] every circuit x time of day x screen shape; the fit; no sky in the preview")
 	var ls: LevelSelect = game.level_select
 	game.audio.select_track(Tracks.DEFAULT_ID)
 	ls.open()
 	await _frames(30)
+	var worst_bg := 0.0
 	for asp: Array in [["16x9", Vector2i(1600, 900)], ["21x9", Vector2i(2100, 900)]]:
 		renderer.fixed_output_size = asp[1]
 		await _frames(5)
-		for t: String in LevelSelect.TIMES:
-			game.audio.set_track_time(ls.track_id(), t)
-			game.apply_time_of_day(t)
-			await _frames(40)
-			await _shot("80_select_%s_%s_%s.png" % [ls.track_id(), t, asp[0]])
+		for ti in Tracks.ALL.size():
+			if ls.index != ti:
+				ls.index = ti
+				game.audio.select_track(ls.track_id())
+				ls._show_track()
+				await _frames(5)
+			for t: String in LevelSelect.TIMES:
+				game.audio.set_track_time(ls.track_id(), t)
+				ls._apply_time(t)
+				ls._t = 0.0
+				await _frames(30)
+				await _shot("80_select_%s_%s_%s.png" % [ls.track_id(), t, asp[0]])
+			# The sway: how much of the circuit is in the free area, and whether
+			# the g-buffer ever shows background (sky) anywhere in the preview.
+			var fill := PackedStringArray()
+			for k in 8:
+				ls._t = LevelSelect.SWAY_PERIOD * k / 8.0
+				await _frames(4)
+				var bg: float = await _gbuffer_background_share()
+				worst_bg = maxf(worst_bg, bg)
+				var ov: AsciiOverlay = renderer.get_overlay()
+				var view: Rect2i = ls._layout(ov.cols, ov.rows).view
+				var bb := ls._bbox(ls._cam.global_transform, tan(deg_to_rad(LevelSelect.PREVIEW_FOV) * 0.5), ls._aspect())
+				var vr := ls._view_ndc()
+				fill.append("%.0f%%x%.0f%% bg %.2f%%" % [bb.size.x / vr.size.x * 100.0 * LevelSelect.FIT_MARGIN, bb.size.y / vr.size.y * 100.0 * LevelSelect.FIT_MARGIN, bg * 100.0])
+				if k == 4:
+					await _shot("80_select_%s_sway_%s.png" % [ls.track_id(), asp[0]])
+			log_line("  %s %s: heading %.0f deg, distance %.0f, view %s cells; over the sway (width x height of the free area, sky share): %s" % [
+				ls.track_id(), asp[0], rad_to_deg(ls._base_yaw), ls._dist, ls._layout(renderer.get_overlay().cols, renderer.get_overlay().rows).view.size, ", ".join(fill)])
+	_m["select sky"] = "worst background share in the preview %.3f%%" % (worst_bg * 100.0)
 	renderer.fixed_output_size = SHOT_SIZE
+	if ls.index != 0:
+		ls.index = 0
+		game.audio.select_track(ls.track_id())
+		ls._show_track()
 	game.audio.set_track_time(Tracks.DEFAULT_ID, "morning")
-	game.apply_time_of_day("morning")
-	# Next track, through the wipe.
+	ls._apply_time("morning")
+	await _frames(10)
+	# Next circuit, through the wipe; focus states.
 	var t0 := Time.get_ticks_msec()
 	ls._move(Vector2i.RIGHT)
 	var mid_shot := false
@@ -4339,12 +4410,14 @@ func _test_level_select() -> void:
 			mid_shot = true
 			await _shot("80_select_wipe.png")
 	log_line("  track change: now %s (%s), wipe %.2f s real time" % [ls.track_id(), game.world.track_def.name, (Time.get_ticks_msec() - t0) / 1000.0])
-	await _frames(40)
-	await _shot("80_select_%s_morning_16x9.png" % ls.track_id())
+	await _frames(20)
+	for fo: int in [LevelSelect.Focus.TIME, LevelSelect.Focus.OPPONENT, LevelSelect.Focus.START]:
+		ls.focus = fo
+		await _frames(6)
+		await _shot("80_select_focus_%d.png" % fo)
 	ls.focus = LevelSelect.Focus.OPPONENT
 	ls._move(Vector2i.RIGHT)
 	await _frames(10)
-	await _shot("80_select_%s_opponent_row.png" % ls.track_id())
 	_m["select"] = "track change to %s ok, opponent now %d" % [ls.track_id(), game.audio.track_opponent(ls.track_id())]
 	ls._move(Vector2i.LEFT)
 	ls.focus = LevelSelect.Focus.PREVIEW
@@ -4354,8 +4427,21 @@ func _test_level_select() -> void:
 	ls.close()
 	game.audio.select_track(Tracks.DEFAULT_ID)
 	await _frames(10)
-	log_line("  back on %s, select closed" % game.world.track_def.id)
+	log_line("  back on %s, select closed; preview look off %s" % [game.world.track_def.id, game.lighting.preview.is_empty()])
 
+
+## Share of g-buffer pixels that are background (no geometry: sky), sampled.
+func _gbuffer_background_share() -> float:
+	await RenderingServer.frame_post_draw
+	var img := renderer.gbuffer_viewport.get_texture().get_image()
+	var n := 0
+	var bgc := 0
+	for y in range(0, img.get_height(), 6):
+		for x in range(0, img.get_width(), 6):
+			n += 1
+			if img.get_pixel(x, y).b >= 0.9999:
+				bgc += 1
+	return float(bgc) / maxf(n, 1)
 
 ## Switching tracks: rebuild cost and leaks, and driving the draft second track
 ## (banked turns, dirt, jumps) with the autopilot, the reel's driver and the
@@ -4375,10 +4461,10 @@ func _test_tracks() -> void:
 		log_line("    surface %s: %d colliders" % [sid, tr.find_children("*", "StaticBody3D", true, false).filter(func(b: Node) -> bool: return b.get_meta(&"surface", &"") == sid).size()])
 	await _frames(2)
 	var space := car.get_world_3d().direct_space_state
-	for sp: float in [18.0, 22.0, 26.0, 30.0, 38.0]:
+	for sp: float in [5.0, 16.0, 40.0, 53.0, 80.0, 96.5, 122.0, 145.0]:
 		var line := PackedStringArray()
 		var xf := tr.pose_at(sp)
-		for u: float in [-1.6, -1.3, -0.6, 0.0, 0.6, 1.3, 1.6]:
+		for u: float in [-2.6, -1.6, -1.3, 0.0, 1.3, 1.6, 2.6]:
 			var o := xf.origin + Vector3(-tr.tangent_at(sp).z, 0.0, tr.tangent_at(sp).x).normalized() * u
 			var q := PhysicsRayQueryParameters3D.create(o + Vector3.UP * 3.0, o - Vector3.UP * 3.0, Track.LAYER_SURFACE | Track.LAYER_PROPS)
 			var h := space.intersect_ray(q)
@@ -4574,3 +4660,329 @@ func _test_time_of_day() -> void:
 	game.audio.set_track_time(Tracks.DEFAULT_ID, AudioDirector.DEFAULT_TIME)
 	game.audio.set_track_time(other, AudioDirector.DEFAULT_TIME)
 	await _frames(10)
+
+
+
+
+
+## Dirt against asphalt, like for like: the same manoeuvres on the open ground
+## (a flat skid pad) with its surface set to asphalt and then to dirt.
+func _test_dirt_feel() -> void:
+	log_line("\n[dirt feel] the same manoeuvres on an asphalt and a dirt skid pad (preset %s)" % game.tuning.current)
+	var gb: StaticBody3D = (game.track as Track).ground_body
+	var pad: Vector3 = (game.track as Track).bounds.end + Vector3(30.0, 0.0, 30.0)
+	var east := Vector3(1.0, 0.0, 0.0)
+	for surf: StringName in [&"road", &"dirt"]:
+		gb.set_meta(&"surface", surf)
+		var out := PackedStringArray()
+		# Launch from rest: speed after 1 s and 2 s, rear wheelspin.
+		_place(pad, east)
+		await _frames(30)
+		_inputs(0.0, 1.0, 0.0, false)
+		var spin := 0.0
+		var v1 := 0.0
+		for f in 240:
+			await _frames(1)
+			spin = maxf(spin, (car.wheel_spin[2] + car.wheel_spin[3]) * 0.5)
+			if f == 119:
+				v1 = car.forward_speed
+		out.append("launch 1 s %.2f, 2 s %.2f u/s, peak rear spin %.2f" % [v1, car.forward_speed, spin])
+		# Top speed (6 s more).
+		await _frames(720)
+		out.append("top %.2f" % car.forward_speed)
+		# Coasting from 10 for 1 s.
+		_place(pad, east, 10.0)
+		await _frames(2)
+		_inputs(0.0, 0.0, 0.0, false)
+		await _frames(120)
+		out.append("coast 1 s from 10: %.2f" % car.forward_speed)
+		# Braking from 10 to rest.
+		_place(pad, east, 10.0)
+		await _frames(2)
+		var p0 := car.global_position
+		_inputs(0.0, 0.0, 1.0, false)
+		var n := 0
+		while car.forward_speed > 0.2 and n < 1200:
+			await _frames(1)
+			n += 1
+		out.append("brake 10->0: %.2f u in %.2f s" % [car.global_position.distance_to(p0), n / 120.0])
+		# Step steer at 8 u/s, part throttle, 1.5 s; then release.
+		_place(pad, east, 8.0)
+		await _frames(2)
+		_inputs(1.0, 0.6, 0.0, false)
+		var slip_max := 0.0
+		var yaw0 := car.global_basis.get_euler().y
+		for f in 180:
+			await _frames(1)
+			slip_max = maxf(slip_max, absf(rad_to_deg(car.slip_angle)))
+		var yaw := absf(rad_to_deg(wrapf(car.global_basis.get_euler().y - yaw0, -PI, PI)))
+		_inputs(0.0, 0.6, 0.0, false)
+		var rec := 0
+		while absf(rad_to_deg(car.slip_angle)) > 5.0 and rec < 480:
+			await _frames(1)
+			rec += 1
+		out.append("step steer at 8: peak slip %.1f deg, turned %.0f deg in 1.5 s, slip under 5 deg %.2f s after release" % [slip_max, yaw, rec / 120.0])
+		# Power slide: 7 u/s, steer 0.6, full throttle 1.5 s.
+		_place(pad, east, 7.0)
+		await _frames(2)
+		_inputs(0.6, 1.0, 0.0, false)
+		var ps := 0.0
+		for f in 180:
+			await _frames(1)
+			ps = maxf(ps, absf(rad_to_deg(car.slip_angle)))
+			if f == 100:
+				camera.snap_to_target()
+				await _shot("86_feel_%s_power_slide_iso.png" % surf)
+				game.set_chase_view(true)
+				await _frames(1)
+				await _shot("86_feel_%s_power_slide_chase.png" % surf)
+				game.set_chase_view(false)
+		out.append("power slide peak slip %.1f deg" % ps)
+		# Handbrake drift: 9 u/s, full steer, handbrake 0.3 s, throttle on.
+		_place(pad, east, 9.0)
+		await _frames(2)
+		_inputs(1.0, 1.0, 0.0, true)
+		await _frames(36)
+		_inputs(1.0, 1.0, 0.0, false)
+		var dt := 0
+		var yaw_d0 := car.global_basis.get_euler().y
+		var turned := 0.0
+		var last := yaw_d0
+		while car.drift_state == Car.Drift.DRIFT and dt < 1200:
+			await _frames(1)
+			var y := car.global_basis.get_euler().y
+			turned += absf(wrapf(y - last, -PI, PI))
+			last = y
+			dt += 1
+		out.append("handbrake drift %.2f s, turned %.0f deg, speed after %.2f" % [dt / 120.0, rad_to_deg(turned), car.forward_speed])
+		_inputs(0.0, 0.0, 0.0, false)
+		log_line("  %s: %s" % [surf, "; ".join(out)])
+		_m["feel " + String(surf)] = "; ".join(out)
+	gb.set_meta(&"surface", &"ground")
+	car.teleport(world.grid_pose())
+	await _frames(10)
+
+
+
+## Dust Bowl screenshots: each feature in iso and chase, in each time of day,
+## with the car arriving at it under the test autopilot (so dust shows where it
+## slides). Also the frame rate with the dust on.
+func _test_dust_tour() -> void:
+	log_line("\n[dust tour] Dust Bowl's features in iso and chase, each time of day")
+	var other := "dust_bowl"
+	game.set_track(other)
+	await _frames(5)
+	var pois: Array = [["grid", 2.5], ["table_top", 17.5], ["bank1", 53.0], ["double", 80.0], ["hairpin", 96.5], ["bank2", 122.0], ["step_down", 146.0], ["flat_right", 164.5]]
+	for t: String in ["morning", "noon", "night"]:
+		game.apply_time_of_day(t)
+		for poi: Array in pois:
+			var s_at: float = poi[1]
+			if poi[0] == "grid":
+				car.teleport(game.world.grid_pose())
+				game.laps.reset()
+				camera.snap_to_target()
+				await _frames(30)
+			else:
+				await _place_on_track(fposmod(s_at - 12.0, track.length), 0.0, 7.0)
+				var ap := Autopilot.new()
+				ap.car = car
+				ap.track = track
+				add_child(ap)
+				var n := 0
+				while n < 600:
+					await _frames(1)
+					n += 1
+					var p := fposmod(track.progress(car.global_position, s_at - 2.0), track.length)
+					if absf(p - s_at) < 0.6:
+						break
+				ap.enabled = false
+				ap.queue_free()
+			await _shot("85_dust_%s_%s_iso.png" % [t, poi[0]])
+			game.set_chase_view(true)
+			await _frames(2)
+			await _shot("85_dust_%s_%s_chase.png" % [t, poi[0]])
+			game.set_chase_view(false)
+			_inputs(0.0, 0.0, 0.0, false)
+	game.apply_time_of_day("morning")
+	game.set_track(Tracks.DEFAULT_ID)
+	await _frames(10)
+
+
+
+## Dust Bowl under bad driving: each jump at every speed from a crawl to nitro,
+## straight, off-centre, crooked, and braking in the air; each banked turn too
+## slow, too fast, and entered on the apron. Per run: air time, landing point,
+## worst pitch / roll, slip after landing, wall contacts, and where the car
+## ends up 2 s later (on the road and upright = fine).
+func _test_abuse() -> void:
+	log_line("\n[abuse] Dust Bowl's jumps and banked turns driven badly")
+	game.set_track("dust_bowl")
+	await _frames(5)
+	var tr: Track = game.track
+	var bad := 0
+	var total := 0
+	var jumps: Array = [["table-top", 11.0, 25.0], ["double", 73.5, 85.0], ["step-down", 139.5, 153.5]]
+	for j: Array in jumps:
+		var s0: float = j[1]
+		for v: float in [2.5, 5.0, 8.0, 11.0, 13.5]:
+			for mode: String in ["straight", "offset", "crooked", "air brake"]:
+				var r: Dictionary = await _abuse_run(tr, s0 - (2.0 if mode == "crooked" else 6.0), v, mode, j[2])
+				total += 1
+				if not r.ok:
+					bad += 1
+				log_line("  %-9s %4.1f u/s %-9s air %.2f s, lands s %5.1f, pitch %3.0f roll %3.0f, slip after %3.0f deg, wall %d, then s %5.1f lat %+.2f %s%s" % [
+					j[0], v, mode, r.air, r.land, r.pitch, r.roll, r.slip, r.walls, r.s_end, r.lat, "upright" if r.upright else "ON ITS SIDE/ROOF", ("" if not r.wide else "  (wide, back on the road and going within 3 s)") if r.ok else "  << BAD"])
+	for b: Array in [["banked turn 1", 39.5], ["banked turn 2", 109.3]]:
+		var s0: float = b[1]
+		for c: Array in [["too slow", 3.0, 0.0], ["fast", 11.5, 0.0], ["nitro", 13.5, 0.0], ["on the apron", 8.0, 2.0], ["at the wall", 11.5, -1.17]]:
+			var r: Dictionary = await _abuse_run(tr, s0 - 4.0, c[1], "bank " + c[0], s0 + 20.0, c[2])
+			total += 1
+			if not r.ok:
+				bad += 1
+			log_line("  %-13s %-12s %4.1f u/s: slip max %3.0f deg, wall %d, roll max %3.0f, then s %5.1f lat %+.2f %s%s" % [
+				b[0], c[0], c[1], r.slip, r.walls, r.roll, r.s_end, r.lat, "upright" if r.upright else "ON ITS SIDE/ROOF", "" if r.ok else "  << BAD"])
+	log_line("  %d of %d runs bad" % [bad, total])
+	_m["abuse"] = "%d of %d runs bad" % [bad, total]
+	game.set_track(Tracks.DEFAULT_ID)
+	await _frames(5)
+
+
+## One run: placed at s0 at speed v; held on the line (or not) through to s_end.
+func _abuse_run(tr: Track, s0: float, v: float, mode: String, s_end: float, side: float = 0.0) -> Dictionary:
+	var lat0 := 0.0
+	if mode == "offset":
+		lat0 = 0.8
+	elif mode.begins_with("bank "):
+		lat0 = side # both banked turns turn right: - is the wall side, + the apron
+	await _place_on_track(s0, lat0, v)
+	if mode == "crooked":
+		var xf := car.global_transform
+		xf.basis = xf.basis.rotated(Vector3.UP, deg_to_rad(10.0))
+		car.teleport(xf)
+		car.linear_velocity = -xf.basis.z * v
+	var hits: Array[int] = [0]
+	var on_hit := func(b: Node) -> void:
+		if b is StaticBody3D and (b as StaticBody3D).collision_layer & Track.LAYER_PROPS:
+			hits[0] += 1
+	car.contact_monitor = true
+	car.max_contacts_reported = 4
+	car.body_entered.connect(on_hit)
+	var air := 0.0
+	var land := -1.0
+	var pitch := 0.0
+	var roll := 0.0
+	var slip := 0.0
+	var hint := s0
+	var landed_t := -1.0
+	var t := 0.0
+	var steer_hold := false
+	while t < 8.0:
+		await _frames(1)
+		t += 1.0 / 120.0
+		hint = tr.progress(car.global_position, hint)
+		var thr := 1.0 if mode != "air brake" or car.wheels_grounded > 0 else 0.0
+		var brk := 1.0 if mode == "air brake" and car.wheels_grounded == 0 else 0.0
+		# Hold the speed (throttle to v, no more) and steer along the line,
+		# except the crooked run, which keeps its wrong heading until it lands.
+		if car.forward_speed > v:
+			thr = 0.0
+		car.nitro_input = v > 12.0 and car.wheels_grounded > 0
+		var steer := 0.0 if steer_hold and landed_t < 0.0 else _pursuit_steer(hint)
+		if mode == "bank on the apron" or mode == "bank at the wall":
+			steer = _pursuit_steer_lat(hint, lat0)
+		_inputs(steer, thr, brk, false)
+		if car.wheels_grounded == 0:
+			air += 1.0 / 120.0
+		elif air > 0.05 and land < 0.0:
+			land = hint
+			landed_t = t
+		var e := car.global_basis.get_euler()
+		pitch = maxf(pitch, absf(rad_to_deg(e.x)))
+		roll = maxf(roll, absf(rad_to_deg(e.z)) - absf(rad_to_deg(tr.bank_at(hint))))
+		if landed_t >= 0.0 or mode.begins_with("bank "):
+			slip = maxf(slip, absf(rad_to_deg(car.slip_angle)))
+		if fposmod(hint - s_end, tr.length) < 2.0 and t > 1.0:
+			break
+	_inputs(0.0, 0.0, 0.0, false)
+	car.nitro_input = false
+	car.body_entered.disconnect(on_hit)
+	var walls: int = hits[0]
+	var s_e := hint
+	var lat := tr.lateral_offset(car.global_position, s_e)
+	var up := car.is_upright()
+	var ok := up and absf(lat) < Track.ROAD_HALF_WIDTH + 0.3 and fposmod(s_e - s_end, tr.length) < 10.0
+	# Not on the road straight away: does it get back on and going within 3 s
+	# (a driver steering for the line, part throttle)?
+	var recovered := ok
+	if not ok and up:
+		for i in 360:
+			await _frames(1)
+			hint = tr.progress(car.global_position, hint)
+			_inputs(_pursuit_steer(hint), 0.6, 0.0, false)
+			if absf(tr.lateral_offset(car.global_position, hint)) < Track.ROAD_HALF_WIDTH and car.forward_speed > 2.0 and car.is_upright():
+				recovered = true
+				break
+		_inputs(0.0, 0.0, 0.0, false)
+		if not recovered:
+			log_line("    not back after 3 s: s %.1f lat %+.2f speed %.2f upright %s, heading off the road's by %.0f deg" % [hint, tr.lateral_offset(car.global_position, hint),
+				car.forward_speed, car.is_upright(), rad_to_deg((-car.global_basis.z).signed_angle_to(tr.tangent_at(hint), Vector3.UP))])
+	return {"air": air, "land": land, "pitch": pitch, "roll": roll, "slip": slip, "walls": walls, "s_end": s_e, "lat": lat, "upright": up, "ok": recovered, "wide": not ok}
+
+
+
+## A detailed trace of one opponent level (--opplevels=n) over two laps:
+## every quarter second in the given stretches (--tracezones=a-b,c-d) or when
+## off the line: progress, lateral, speed vs plan, slip, yaw rate, wheels down,
+## inputs, drift and nitro.
+func _test_opp_trace() -> void:
+	var zones: Array[Vector2] = []
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--tracezones="):
+			for z in arg.trim_prefix("--tracezones=").split(",", false):
+				var ab := z.split("-")
+				zones.append(Vector2(float(ab[0]), float(ab[1])))
+	var level: int = _levels()[0]
+	log_line("\n[opponent trace] level %d on %s" % [level, track.def.id])
+	var opp := _opp_on(level)
+	_park_player()
+	await _frames(30)
+	var oc: Car = opp.car
+	var drv: OpponentDriver = opp.driver
+	var t := 0.0
+	var t_end := 75.0
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--tracetime="):
+			t_end = float(arg.trim_prefix("--tracetime="))
+	# The last 2 s at 1/8 s, printed when the driver asks for a reset.
+	var ring: Array[String] = []
+	var dumped := [0]
+	drv.reset_requested.connect(func() -> void:
+		log_line("  -- reset %d at t %.2f; the 2 s before:" % [drv.resets, t])
+		for l in ring:
+			log_line("     " + l)
+		dumped[0] += 1)
+	while t < t_end:
+		await _frames(1)
+		t += 1.0 / 120.0
+		if int(t * 120.0) % 15 == 0:
+			var e := oc.global_basis.get_euler()
+			ring.append("t %6.2f s %6.1f lat %+.2f v %5.2f plan %5.2f slip %+4.0f yaw %+4.0f/s pitch %+3.0f roll %+3.0f down %d up %s steer %+.2f thr %.2f brk %.2f hb %s drift %d nitro %.1f" % [
+				t, drv.progress, track.lateral_offset(oc.global_position, drv.progress), oc.forward_speed, drv._speed_at(drv.progress),
+				rad_to_deg(oc.slip_angle), rad_to_deg(oc.angular_velocity.y), rad_to_deg(e.x), rad_to_deg(e.z), oc.wheels_grounded, oc.is_upright(),
+				oc.steer_input, oc.throttle_input, oc.brake_input, oc.handbrake_input, oc.drift_state, oc.nitro_level])
+			if ring.size() > 56:
+				ring.pop_front()
+		if int(t * 120.0) % 30 != 0:
+			continue
+		var sp := drv.progress
+		var lat := track.lateral_offset(oc.global_position, sp)
+		var inz := false
+		for z in zones:
+			if sp >= z.x and sp <= z.y:
+				inz = true
+		if not inz and absf(lat) < 1.2:
+			continue
+		log_line("  t %5.2f s %6.1f lat %+.2f line %+.2f v %5.2f plan %5.2f slip %+4.0f yaw %+4.0f/s down %d steer %+.2f thr %.2f brk %.2f hb %s drift %d nitro %.1f resets %d" % [
+			t, sp, lat, drv._line_lateral(sp), oc.forward_speed, drv._speed_at(sp), rad_to_deg(oc.slip_angle), rad_to_deg(oc.angular_velocity.y),
+			oc.wheels_grounded, oc.steer_input, oc.throttle_input, oc.brake_input, oc.handbrake_input, oc.drift_state, oc.nitro_level, drv.resets])
+	_opp_off()

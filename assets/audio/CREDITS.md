@@ -50,7 +50,14 @@ Required attribution:
 
 - "Car tire squeal skid loop" by audible-edge (Tom Haigh), loop edit by qubodup — https://opengameart.org/content/car-tire-squeal-skid-loop — CC BY 3.0 (http://creativecommons.org/licenses/by/3.0/). Levelled.
 
-Courtesy credit (CC0): Additional sounds: Dorian CLAIR - BigSoundBank.com.
+Loose surface (dirt), both from one CC0 recording, built by `tools/prepare_audio.py --dirt <the downloaded 1284.flac>`:
+
+| File | What | Source, author, licence |
+|---|---|---|
+| `sfx/dirt_roll.ogg` | Tyres rolling on loose gravel, 3 s loop (follows the speed on dirt) | "Bike on gravel (MTB) #1" by Joseph SARDIN, BigSoundBank, https://bigsoundbank.com/bike-on-gravel-mtb-1-s1284.html (sound 1284). CC0. Cut from 8.0-11.0 s, looped, levelled, peaks soft-limited. |
+| `sfx/dirt_slide.ogg` | Sliding on gravel, 3 s loop (slides, wheelspin and drifts on dirt) | Derived from the same recording, 2.0-14.0 s: high-passed at 700 Hz, four time-offset copies summed into a continuous scrape, pitched up 1.12x, looped, levelled, peaks soft-limited. Not a recording of a sliding car. CC0. |
+
+Courtesy credit (CC0): Additional sounds: Dorian CLAIR, Joseph SARDIN - BigSoundBank.com.
 
 ## Chassis, impacts
 

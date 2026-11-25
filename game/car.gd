@@ -224,6 +224,11 @@ var wheel_surface: Array[StringName] = [&"", &"", &"", &""]
 ## is on a surface other than asphalt or the plain ground (dirt, snow...).
 var _grip_ratio_sum: float = 0.0
 var _special_surface: bool = false
+var _drift_loss_sum: float = 0.0
+## Per wheel: how hard it is sliding sideways (0 = gripping, 1 = well past the
+## tyre's peak) and spinning under power (0..1), for the dust and tyre sounds.
+var wheel_slide: PackedFloat32Array = [0.0, 0.0, 0.0, 0.0]
+var wheel_spin: PackedFloat32Array = [0.0, 0.0, 0.0, 0.0]
 var slip_angle: float = 0.0 ## car body slip (radians), + = moving to its right
 var local_accel: Vector3 = Vector3.ZERO ## filtered, body frame: x right, z forward
 ## Per wheel (fl, fr, rl, rr): how much of the tyre's grip is asked for, 1 = at the
@@ -390,6 +395,7 @@ func _physics_process(delta: float) -> void:
 	wheels_on_road = 0
 	_grip_ratio_sum = 0.0
 	_special_surface = false
+	_drift_loss_sum = 0.0
 	for i in 4:
 		var front := i < 2
 		var mount := xf * _mounts[i]
@@ -400,6 +406,8 @@ func _physics_process(delta: float) -> void:
 			_wheel_drop[i] = travel_up + travel_down
 			wheel_usage[i] = 0.0
 			wheel_surface[i] = &""
+			wheel_slide[i] = 0.0
+			wheel_spin[i] = 0.0
 			continue
 		var dist := mount.distance_to(hit.position)
 		var hub := clampf(dist - wheel_radius, 0.0, travel_up + travel_down)
@@ -436,7 +444,13 @@ func _physics_process(delta: float) -> void:
 
 		var surf_grip := (grip_road if on_road else grip_ground) if classic else grip_road * float(Surfaces.get_value(surf, "grip", 1.0))
 		_grip_ratio_sum += surf_grip / grip_road
-		var mu := surf_grip * (front_grip if front else rear_grip)
+		# Surface factors on the car's own tunables (1 on asphalt and the ground).
+		var f_rear := 1.0 if classic else float(Surfaces.get_value(surf, "rear_grip", 1.0))
+		var f_power := 1.0 if classic else float(Surfaces.get_value(surf, "power_oversteer", 1.0))
+		var f_coast := 1.0 if classic else float(Surfaces.get_value(surf, "coast", 1.0))
+		var f_brake := 1.0 if classic else float(Surfaces.get_value(surf, "brake", 1.0))
+		_drift_loss_sum += 1.0 if classic else float(Surfaces.get_value(surf, "drift_loss", 1.0))
+		var mu := surf_grip * (front_grip if front else rear_grip * f_rear)
 		if not front and handbrake_input and (not drift_mode or forward_speed < drift_min_speed and absf(steer_input) >= drift_steer_threshold):
 			mu *= handbrake_rear_grip
 		var grip := mu * load
@@ -452,7 +466,7 @@ func _physics_process(delta: float) -> void:
 		var f_lat := -grip * shape
 		if not front and throttle_input > 0.0 and forward_speed > -0.5:
 			var rv := clampf(forward_speed / top_speed, 0.0, 1.0)
-			f_lat *= 1.0 - power_oversteer * throttle_input * (1.0 - rv * rv)
+			f_lat *= 1.0 - (power_oversteer if f_power == 1.0 else minf(power_oversteer * f_power, 0.9)) * throttle_input * (1.0 - rv * rv)
 		f_lat = clampf(f_lat, -absf(v_lat) * stop, absf(v_lat) * stop)
 
 		# Longitudinal.
@@ -473,7 +487,7 @@ func _physics_process(delta: float) -> void:
 				var pivot := drift_mode and forward_speed < drift_min_speed and absf(steer_input) >= drift_steer_threshold
 				braking += mass * 0.5 * handbrake_decel * (DRIFT_PIVOT_BRAKE if pivot else 1.0)
 			if throttle_input <= 0.0 and brake_input <= 0.0 and forward_speed > 0.5:
-				braking += mass * 0.5 * engine_braking
+				braking += mass * 0.5 * engine_braking * f_coast
 			if nitro_level > 0.0 and forward_speed > -0.5:
 				var rn := clampf(forward_speed / top_eff, 0.0, 1.0)
 				f_long += nitro_level * mass * 0.5 * nitro_accel * (1.0 - rn * rn)
@@ -481,8 +495,8 @@ func _physics_process(delta: float) -> void:
 				braking += mass * 0.5 * nitro_overspeed_drag * (forward_speed - top_speed) * (1.0 - nitro_level)
 		if brake_input > 0.0 and forward_speed >= 0.5:
 			var bias := brake_front_bias if front else 1.0 - brake_front_bias
-			braking += brake_input * mass * brake_decel * bias * 0.5
-		braking += corner_mass * rolling_decel
+			braking += brake_input * mass * brake_decel * bias * 0.5 * f_brake
+		braking += corner_mass * rolling_decel * (f_coast if throttle_input <= 0.0 else 1.0)
 		if not on_road:
 			braking += corner_mass * offroad_drag * absf(v_long)
 		elif not classic:
@@ -495,6 +509,9 @@ func _physics_process(delta: float) -> void:
 		var g_long := grip * grip_long_ratio
 		wheel_usage[i] = Vector2(f_long / maxf(g_long, 1e-6), x).length()
 		var use := Vector2(f_long / maxf(g_long, 1e-6), f_lat / maxf(grip, 1e-6)).length()
+		wheel_slide[i] = clampf((absf(x) - 1.0) / 1.5, 0.0, 1.0)
+		# Wheelspin: drive asking for more than the tyre has left (rear, under power).
+		wheel_spin[i] = clampf((use - 1.0) * 2.0, 0.0, 1.0) if not front and f_long > 0.0 else 0.0
 		if use > 1.0:
 			f /= use
 		f *= 1.0 - _drift_w
@@ -509,6 +526,7 @@ func _physics_process(delta: float) -> void:
 	air_time = 0.0 if wheels_grounded > 0 else air_time + delta
 	if wheels_grounded == 0:
 		_stabilise_in_air(up)
+	_update_dust()
 	_update_visuals(delta)
 
 
@@ -656,7 +674,7 @@ func _apply_drift_forces(delta: float, up: Vector3, fwd: Vector3) -> void:
 		var a_lat := minf(spd * spd * kappa, drift_grip * G * surface) * g_frac
 		drift_radius = spd * spd / a_lat if a_lat > 1e-3 else INF
 		apply_central_force(side * drift_dir * mass * a_lat * _drift_w)
-		var a_long := -drift_speed_loss - (1.0 - throttle_input) * (rolling_decel + engine_braking) \
+		var a_long := -drift_speed_loss * (_drift_loss_sum / maxf(wheels_grounded, 1.0) if _special_surface else 1.0) - (1.0 - throttle_input) * (rolling_decel + engine_braking) \
 				- brake_input * brake_decel * 0.5 - offroad_drag * spd * (1.0 - on_road)
 		apply_central_force(vdir * mass * a_long * g_frac * _drift_w)
 		drift_target = deg_to_rad(clampf(drift_angle_deg + drift_angle_steer_deg * inside, 5.0, drift_angle_max_deg))
@@ -710,6 +728,38 @@ func _update_visuals(delta: float) -> void:
 
 
 ## Puts the car at `xf` (on the ground plane) standing still.
+var _dust: Dust
+
+
+## Dust behind the rear wheels when they slide, spin or drift on a dusty surface.
+func _update_dust() -> void:
+	var colour := Color.TRANSPARENT
+	var k := 0.0
+	for i in [2, 3]:
+		var surf := wheel_surface[i]
+		if surf == &"" or Surfaces.is_classic(surf):
+			continue
+		var c: Variant = Surfaces.get_value(surf, "dust", null)
+		if c == null:
+			continue
+		colour = c
+		k = maxf(k, maxf(wheel_slide[i], wheel_spin[i]))
+		k = maxf(k, maxf(wheel_slide[i - 2], 0.0) * 0.7)
+	if colour.a > 0.0:
+		var spd := clampf(absf(forward_speed) / 3.0, 0.0, 1.0)
+		if drift_state == Drift.DRIFT:
+			k = maxf(k, 0.8)
+		k *= maxf(spd, wheel_spin[2])
+	if _dust == null:
+		if colour.a == 0.0 or k <= 0.12:
+			return
+		_dust = Dust.new()
+		_dust.car = self
+		add_child(_dust)
+	var rear := (_mounts[2] + _mounts[3]) * 0.5 if _mounts.size() == 4 else Vector3(0.0, 0.0, 0.4)
+	_dust.feed(colour, k, Vector3(rear.x, rear.y - 0.12, rear.z + 0.05))
+
+
 func teleport(xf: Transform3D) -> void:
 	global_transform = Transform3D(xf.basis.orthonormalized(), xf.origin + Vector3.UP * 0.02)
 	linear_velocity = Vector3.ZERO

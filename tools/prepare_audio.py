@@ -3,12 +3,16 @@
 
     tools/prepare_audio.py <raw dir> [--out assets/audio] [--standins <dir>]
     tools/prepare_audio.py --beeps [--out assets/audio]
+    tools/prepare_audio.py --dirt <gravel recording> [--out assets/audio]
 
 <raw dir> is the sourcing folder's `raw/` (see assets/audio/CREDITS.md for where
 each file came from). Writes assets/audio/sfx/*.ogg and assets/audio/sounds.cfg,
 the table that tells the game which file plays which role. The start
 lights' two beeps are synthesised tones (a beep is a tone); --beeps writes
-only those (and their table entries). With --standins it
+only those (and their table entries). --dirt builds only the two loose-surface
+tyre loops from the CC0 "Bike on gravel (MTB) #1" recording (BigSoundBank
+1284.flac): the roll is the recording looped, the slide is derived from it
+(high-passed and layered into a denser scrape); it adds their table entries. With --standins it
 instead writes synthetic test tones and a matching table into <dir> (for
 measuring the engine's pitch handling; never shipped).
 
@@ -148,9 +152,12 @@ def main():
     ap.add_argument("--beeps", action="store_true")
     ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "audio"))
     ap.add_argument("--standins")
+    ap.add_argument("--dirt")
     a = ap.parse_args()
     if a.standins:
         return standins(a.standins)
+    if a.dirt:
+        return write_dirt(a.dirt, a.out)
     if a.beeps:
         # Only the beeps: write them and add their sections to the table if missing.
         lines = []
@@ -210,6 +217,77 @@ def main():
     with open(os.path.join(a.out, "sounds.cfg"), "w") as f:
         f.write("\n".join(table))
     print("wrote", os.path.join(a.out, "sounds.cfg"))
+
+
+# Loose-surface tyre loops: [role, start s, length s] in the gravel recording.
+DIRT_ROLL = ["dirt_roll", 8.0, 3.0]
+DIRT_SLIDE = ["dirt_slide", 2.0, 12.0] # source span for the layered scrape
+DIRT_GAIN_DB = {"dirt_roll": -10.0, "dirt_slide": -2.0}
+
+
+def highpass(x, hz):
+    """One-pole high-pass, run twice (12 dB/oct)."""
+    a = 1.0 / (1.0 + 2 * np.pi * hz / SR)
+    for _ in range(2):
+        y = np.empty_like(x)
+        prev_x = np.zeros(x.shape[1])
+        prev_y = np.zeros(x.shape[1])
+        for i in range(len(x)):
+            prev_y = a * (prev_y + x[i] - prev_x)
+            prev_x = x[i]
+            y[i] = prev_y
+        x = y
+    return x
+
+
+def soft_limit(x, ceiling_db=-1.0):
+    """Gravel is all transients: levelled to LOOP_LUFS its peaks clip. Above
+    half the ceiling the peaks are bent over (tanh knee), then the whole is
+    scaled so the highest sits at the ceiling."""
+    c = 10 ** (ceiling_db / 20)
+    t = 0.5 * c
+    a = np.abs(x)
+    over = a > t
+    y = x.copy()
+    y[over] = np.sign(x[over]) * (t + (c - t) * np.tanh((a[over] - t) / (c - t)))
+    pk = np.abs(y).max()
+    return y * min(1.0, c / max(pk, 1e-9))
+
+
+def write_dirt(src, out):
+    x = decode(src, 1)
+    sfx = os.path.join(out, "sfx")
+    os.makedirs(sfx, exist_ok=True)
+    role, start, length = DIRT_ROLL
+    seg = x[int(start * SR):int((start + length + 1.0) * SR)]
+    loop = make_loop(seg, length)
+    l0 = lufs(loop)
+    loop *= 10 ** ((LOOP_LUFS - l0) / 20)
+    loop = soft_limit(loop)
+    encode(loop, os.path.join(sfx, role + ".ogg"), 7)
+    print(f"{role}: {src} {start:.2f}+{length:.2f} s loop, limited, {l0:.1f} -> {lufs(loop):.1f} LUFS, peak {db(np.abs(loop).max()):.1f} dBFS")
+    # Slide: the crunch without the rumble, four time-offset layers summed into
+    # a continuous scrape, pitched up a little (resampled), looped.
+    role2, s0, span = DIRT_SLIDE
+    src_seg = highpass(x[int(s0 * SR):int((s0 + span) * SR)].astype(np.float64), 700.0)
+    n = int(4.0 * SR)
+    layers = [src_seg[int(o * SR):int(o * SR) + n] for o in (0.0, 2.3, 4.9, 7.6)]
+    mix = sum(layers) / 2.0
+    idx = np.arange(0, len(mix) - 1, 1.12)
+    mix = np.stack([np.interp(idx, np.arange(len(mix)), mix[:, c]) for c in range(mix.shape[1])], axis=1)
+    loop2 = make_loop(mix, 3.0)
+    l1 = lufs(loop2)
+    loop2 *= 10 ** ((LOOP_LUFS - l1) / 20)
+    loop2 = soft_limit(loop2)
+    encode(loop2, os.path.join(sfx, role2 + ".ogg"), 7)
+    print(f"{role2}: derived from {src} {s0:.1f}-{s0 + span:.1f} s (high-pass 700 Hz, 4 layers, pitch x1.12), {l1:.1f} -> {lufs(loop2):.1f} LUFS, peak {db(np.abs(loop2).max()):.1f} dBFS")
+    path = os.path.join(out, "sounds.cfg")
+    table = open(path).read() if os.path.exists(path) else ""
+    for r in (role, role2):
+        if f"[{r}]" not in table:
+            table = table.rstrip("\n") + "\n\n" + "\n".join([f"[{r}]", f'file="sfx/{r}.ogg"', f"gain_db={DIRT_GAIN_DB[r]:.1f}"]) + "\n"
+    open(path, "w").write(table)
+    print("updated", path)
 
 
 def standins(d):

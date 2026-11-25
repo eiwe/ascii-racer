@@ -192,6 +192,7 @@ func _build_props() -> void:
 	# of the road (and of the gate).
 	_build_trees(theme, gate_pos)
 	_build_cones(theme)
+	_build_markers(theme)
 
 
 func _build_trees(theme: Dictionary, gate_pos: Vector3) -> void:
@@ -200,14 +201,14 @@ func _build_trees(theme: Dictionary, gate_pos: Vector3) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = theme.get("tree_seed", TREE_SEED)
 	var area := track.bounds.grow(9.0)
-	var clear := Track.ROAD_HALF_WIDTH + Track.KERB_WIDTH + TREE_CLEARANCE
+	var clear := Track.ROAD_HALF_WIDTH + Track.KERB_WIDTH + TREE_CLEARANCE + (1.3 if track.arena else 0.0)
 	var step := 3.4
 	var x := area.position.x
 	while x < area.end.x:
 		var z := area.position.z
 		while z < area.end.z:
 			var p := Vector3(x + rng.randf_range(-1.3, 1.3), 0.0, z + rng.randf_range(-1.3, 1.3))
-			var keep := rng.randf() < 0.24
+			var keep := rng.randf() < float(theme.get("tree_keep", 0.24))
 			var pine := rng.randf() < 0.5
 			var sc := rng.randf_range(1.15, 1.65)
 			z += step
@@ -233,6 +234,103 @@ func _build_cones(theme: Dictionary) -> void:
 	if track_def.id == Tracks.FIGURE_EIGHT.id:
 		for s: float in CONE_PAIR_S:
 			add_cone(track.pose_at(s, -edge).origin)
+
+
+## Arena markers (theme "markers"): tyre stacks round the outside of the flat
+## corners and at the ends of the straights, hay bales beside the jumps. They
+## stand just off the berms and are solid (a car sliding wide bumps them).
+func _build_markers(theme: Dictionary) -> void:
+	if not theme.get("markers", false):
+		return
+	var h := Track.ROAD_HALF_WIDTH
+	# Flat corners (no banking): stacks round the outside, one inside at the apex.
+	for c in corner_apexes(1.0 / 7.0):
+		var s: float = c[0]
+		var side: float = c[1]
+		if track.bank_at(s) != 0.0:
+			continue
+		var span := 6.0
+		var ds := -span
+		while ds <= span:
+			add_tyre_stack(track.pose_at(s + ds, -side * (h + 0.85)).origin)
+			ds += 1.0
+		add_tyre_stack(track.pose_at(s, side * (h + 0.75)).origin)
+	# Jumps: bales along both sides of each raised stretch.
+	var s2 := 0.0
+	while s2 < track.length:
+		if track.structure_at(s2) == 1 and track.bank_at(s2) == 0.0 and track.height_at(s2) > 0.05:
+			for u: float in [-1.0, 1.0]:
+				add_hay_bale(track.pose_at(s2, u * (h + 1.3 + track.height_at(s2) * 1.2 + 0.35)))
+		s2 += 1.6
+
+
+const TYRE_RADIUS: float = 0.2
+const TYRE_HEIGHT: float = 0.11
+
+
+## Three tyres stacked (a solid cylinder to bump into).
+func add_tyre_stack(pos: Vector3) -> void:
+	var body := StaticBody3D.new()
+	body.collision_layer = Track.LAYER_PROPS
+	body.collision_mask = 0
+	body.position = Vector3(pos.x, Track.GROUND_Y, pos.z)
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = TYRE_RADIUS
+	mesh.bottom_radius = TYRE_RADIUS
+	mesh.height = TYRE_HEIGHT * 0.92
+	mesh.radial_segments = 12
+	mesh.rings = 1
+	for i in 3:
+		var mi := MeshInstance3D.new()
+		mi.mesh = mesh
+		mi.material_override = _marker_material(Color("2c2c33") if i != 1 else Color("c8c2b0"))
+		mi.position = Vector3(0.0, TYRE_HEIGHT * (i + 0.5), 0.0)
+		body.add_child(mi)
+	var cs := CollisionShape3D.new()
+	var shape := CylinderShape3D.new()
+	shape.radius = TYRE_RADIUS
+	shape.height = TYRE_HEIGHT * 3.0
+	cs.shape = shape
+	cs.position = Vector3(0.0, TYRE_HEIGHT * 1.5, 0.0)
+	body.add_child(cs)
+	props.add_child(body)
+
+
+## A straw bale, long side along the road.
+func add_hay_bale(xf: Transform3D) -> void:
+	var body := StaticBody3D.new()
+	body.collision_layer = Track.LAYER_PROPS
+	body.collision_mask = 0
+	var fwd := -xf.basis.z
+	fwd.y = 0.0
+	body.transform = Transform3D(Basis.looking_at(fwd.normalized(), Vector3.UP), Vector3(xf.origin.x, Track.GROUND_Y, xf.origin.z))
+	var size := Vector3(0.36, 0.3, 0.7)
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = size
+	mi.mesh = bm
+	mi.material_override = _marker_material(Color("d4b25a"))
+	mi.position = Vector3(0.0, size.y * 0.5, 0.0)
+	body.add_child(mi)
+	var cs := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = size
+	cs.shape = shape
+	cs.position = mi.position
+	body.add_child(cs)
+	props.add_child(body)
+
+
+var _marker_materials: Dictionary = {}
+
+
+func _marker_material(c: Color) -> StandardMaterial3D:
+	if not _marker_materials.has(c):
+		var m := StandardMaterial3D.new()
+		m.albedo_color = c
+		m.roughness = 1.0
+		_marker_materials[c] = m
+	return _marker_materials[c]
 
 
 ## Arc lengths along the east straight of the two cones beside it (outside, left).

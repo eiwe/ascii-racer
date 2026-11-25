@@ -237,6 +237,9 @@ func is_classic() -> bool:
 ## The current track's overrides per mode name (Tracks' time_tweaks: the time
 ## names are the mode names), merged over the mode's table in set_mode.
 var tweaks: Dictionary = {}
+## The level select's preview look per mode name, merged after the tweaks
+## (LevelSelect.PREVIEW_LIGHT); empty in a race.
+var preview: Dictionary = {}
 
 
 func set_mode(index: int) -> void:
@@ -244,6 +247,8 @@ func set_mode(index: int) -> void:
 	var m: Dictionary = MODES[mode]
 	if tweaks.has(m.name):
 		m = m.merged(tweaks[m.name], true)
+	if preview.has(m.name):
+		m = m.merged(preview[m.name], true)
 	var classic: bool = m.get("classic", false)
 	if classic:
 		sun.basis = Basis.looking_at(-CLASSIC_FROM.normalized(), Vector3.UP)

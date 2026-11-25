@@ -6,7 +6,9 @@
 ##                            exactly two straights of length -1 are solved for closure
 ##   start_heading_deg, origin   where the walk starts
 ##   elevation                ranges of raised road: {from, to, rise: [y0, y1], shape:
-##                            "ease" | "kick" | "flat", deck (bridge span), jump (part of a jump)}
+##                            "ease" | "kick" | "flat", deck (bridge span), jump (part of a jump),
+##                            clear_speed / roll_speed (the drivers' take-off speeds; without them
+##                            they take the jump flat out)}
 ##   bank                     ranges of banked road: {from, to, deg (outside of the turn up), ease_in, ease_out}
 ##   surface                  the road's base surface id (Surfaces)
 ##   patches                  {from, to, surface, u: [u0, u1] (across, - = left; optional = full width)}
@@ -17,6 +19,7 @@
 ##   time_tweaks              per time of day ("morning" | "noon" | "night"): lighting
 ##                            overrides of the mode's table keys (sun_az, sun_energy, ...), see Lighting.tweaks
 ##   description              one line for the level select
+##   tests                    drive-test places (optional): block [[name, s, u, yaw]], shove [[name, s]]
 class_name Tracks
 extends RefCounted
 
@@ -68,49 +71,74 @@ const FIGURE_EIGHT: Dictionary = {
 	"time_tweaks": {},
 }
 
-## A first draft of the dirt track, here to prove the foundation (banking,
-## surfaces, several jump shapes, switching tracks); phase 2 makes it the real
-## thing. An oval with banked ends, a double and a step-down on the back
-## straight and a dirt surface.
+## Dust Bowl: a dirt arena, a different lap from Figure Eight's road circuit.
+## A lopsided "P" (about 169 long): the front straight with a table-top, banked
+## turn 1 (velodrome-style, 26 deg, r 9, half a lap of turning), the back
+## straight with a double, a tight flat left hairpin where the dirt makes you
+## slide, a short straight into banked turn 2 (24 deg, r 8), the long straight
+## with a step-down, and a flat right onto the front straight again. Banked
+## turns have a tall tyre wall outside and an apron inside; dirt has no kerbs,
+## so berms and a darker edge band mark the edges (Track's arena style).
 const DUST_BOWL: Dictionary = {
 	"id": "dust_bowl",
 	"name": "DUST BOWL",
-	"description": "dirt, banked turns and jumps (draft)",
-	# A rounded rectangle (about 112 long): front straight, banked turns 1-2,
-	# back straight with a double and a step-down, banked turns 3-4.
+	"description": "dirt arena, banked turns and jumps",
 	"layout": [
-		["S", -1.0], # front straight (solved: 20)
-		["A", 9.0, 90.0],
-		["S", 8.0],
-		["A", 9.0, 90.0],
-		["S", 20.0], # back straight: double, step-down
-		["A", 9.0, 90.0],
-		["S", -1.0], # (solved: 8)
-		["A", 9.0, 90.0],
+		["S", -1.0], # front straight: start, table-top (solved: 39.5)
+		["A", 9.0, 180.0], # banked turn 1 (s 39.5 .. 67.8)
+		["S", 26.0], # back straight: the double
+		["A", 3.5, -90.0], # tight flat left (s 93.8 .. 99.3)
+		["S", -1.0], # short straight (solved: 10)
+		["A", 8.0, 180.0], # banked turn 2 (s 109.3 .. 134.4)
+		["S", 25.5], # long straight: the step-down
+		["A", 6.0, 90.0], # flat right onto the front straight (s 159.9 .. 169.3)
 	],
 	"start_heading_deg": 0.0,
-	"origin": Vector2(-10.0, 10.0),
+	"origin": Vector2(-20.0, -20.0),
+	# Jumps sit well clear of the banked turns: banked road is lifted (its low
+	# edge stays on the ground), and the lift eases in and out over 8, gently
+	# enough that even nitro speed does not take off where it ends.
 	"elevation": [
-		{"from": 58.0, "to": 59.5, "rise": [0.0, 0.25], "shape": "kick", "jump": true},
-		{"from": 59.5, "to": 61.0, "rise": [0.25, 0.0], "shape": "ease", "jump": true},
-		{"from": 62.5, "to": 64.0, "rise": [0.0, 0.25], "shape": "kick", "jump": true},
-		{"from": 64.0, "to": 65.5, "rise": [0.25, 0.0], "shape": "ease", "jump": true},
-		{"from": 67.0, "to": 68.5, "rise": [0.0, 0.35], "shape": "kick", "jump": true},
-		{"from": 68.5, "to": 70.0, "rise": [0.35, 0.35], "shape": "flat", "jump": true},
-		{"from": 70.0, "to": 72.0, "rise": [0.35, 0.0], "shape": "ease", "jump": true},
+		# Table-top: kicker, a 5-long table, a landing slope; 11 of run-out to turn 1.
+		{"from": 11.0, "to": 14.0, "rise": [0.0, 0.45], "shape": "kick", "jump": true, "clear_speed": 11.0, "roll_speed": 6.0},
+		{"from": 14.0, "to": 19.0, "rise": [0.45, 0.45], "shape": "flat", "jump": true, "clear_speed": 11.0, "roll_speed": 6.0},
+		{"from": 19.0, "to": 25.0, "rise": [0.45, 0.0], "shape": "ease", "jump": true, "clear_speed": 11.0, "roll_speed": 6.0},
+		# Double: kicker, a dip, a second hump with a short face and a long back
+		# (the landing); clear it from the first lip, or roll both.
+		{"from": 73.5, "to": 76.0, "rise": [0.0, 0.4], "shape": "kick", "jump": true, "clear_speed": 10.5, "roll_speed": 6.0},
+		{"from": 76.0, "to": 78.0, "rise": [0.4, 0.0], "shape": "ease", "jump": true, "clear_speed": 10.5, "roll_speed": 6.0},
+		{"from": 79.0, "to": 80.5, "rise": [0.0, 0.4], "shape": "ease", "jump": true, "clear_speed": 10.5, "roll_speed": 6.0},
+		{"from": 80.5, "to": 85.0, "rise": [0.4, 0.0], "shape": "ease", "jump": true, "clear_speed": 10.5, "roll_speed": 6.0},
+		# Step-down: up onto a plateau, a step down to a lower table, a long
+		# landing slope.
+		{"from": 139.5, "to": 144.5, "rise": [0.0, 0.6], "shape": "ease", "jump": true, "clear_speed": 9.0, "roll_speed": 6.0},
+		{"from": 144.5, "to": 146.5, "rise": [0.6, 0.6], "shape": "flat", "jump": true, "clear_speed": 9.0, "roll_speed": 6.0},
+		{"from": 146.5, "to": 147.7, "rise": [0.6, 0.25], "shape": "ease", "jump": true, "clear_speed": 9.0, "roll_speed": 6.0},
+		{"from": 147.7, "to": 148.5, "rise": [0.25, 0.25], "shape": "flat", "jump": true, "clear_speed": 9.0, "roll_speed": 6.0},
+		{"from": 148.5, "to": 153.5, "rise": [0.25, 0.0], "shape": "ease", "jump": true, "clear_speed": 9.0, "roll_speed": 6.0},
 	],
 	"bank": [
-		{"from": 20.0, "to": 56.3, "deg": 22.0, "ease_in": 4.0, "ease_out": 4.0},
-		{"from": 76.3, "to": 112.5, "deg": 22.0, "ease_in": 4.0, "ease_out": 4.0},
+		{"from": 36.5, "to": 70.8, "deg": 26.0, "ease_in": 8.0, "ease_out": 8.0},
+		{"from": 106.5, "to": 135.5, "deg": 24.0, "ease_in": 8.0, "ease_out": 8.0},
 	],
 	"surface": &"dirt",
-	"patches": [{"from": 2.0, "to": 18.0, "surface": &"road", "u": [-1.35, 0.0]}],
-	"start_s": 10.0,
+	"patches": [],
+	"start_s": 5.0,
 	"checkpoints": [0.3, 0.65],
+	# Drive-test places: the player's car parked in the way, and side hits.
+	"tests": {
+		"block": [["on the line, front straight", 31.0, 0.0, 0.0], ["across the hairpin exit", 101.0, -0.2, 90.0]],
+		"shove": [["front straight", 30.0], ["banked turn 1", 52.0]],
+	},
 	"kerbs": false,
-	"theme": {"trees": true, "tree_seed": 11, "cones": false, "gate": true},
-	# A dustier, warmer morning sun from across the back straight.
-	"time_tweaks": {"morning": {"sun_az": 70.0, "sun_color": Color(1.0, 0.76, 0.56)}},
+	"theme": {"arena": true, "trees": true, "tree_seed": 11, "tree_keep": 0.07, "cones": false, "gate": true, "markers": true},
+	# Greener, darker surround so the ochre track stands out; a dustier,
+	# warmer morning sun from across the back straight.
+	"time_tweaks": {
+		"morning": {"sun_az": 70.0, "sun_color": Color(1.0, 0.78, 0.58), "ground": Color(0.1, 0.15, 0.08), "track": 1.55},
+		"noon": {"ground": Color(0.08, 0.13, 0.06), "track": 1.2},
+		"night": {"ground": Color(0.07, 0.1, 0.09), "track": 1.8},
+	},
 }
 
 const ALL: Array[Dictionary] = [FIGURE_EIGHT, DUST_BOWL]

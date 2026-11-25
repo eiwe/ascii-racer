@@ -12,7 +12,9 @@
 ##
 ## Tyres: a squeal loop that follows how far past the grip limit the tyres are
 ## and the speed, and a skid loop for the handbrake drift; silent in the air and
-## off the road. Chassis: a landing thump scaled by the vertical speed at
+## off the road. On a loose surface (Surfaces "sound" = "dirt") they give way,
+## by the share of wheels on it, to a gravel roll that follows the speed and a
+## gravel slide that follows the slide, the slip angle and the drift. Chassis: a landing thump scaled by the vertical speed at
 ## touchdown, a knock for kerbs and bumps (suspension spikes), impacts by the
 ## velocity change (solid things and cones sound different). Nitro: a burst at
 ## ignition and a sustained hiss while burning.
@@ -54,6 +56,12 @@ const SLIP_FROM_DEG: float = 12.0
 const SLIP_SPAN_DEG: float = 20.0
 const SQUEAL_ON: float = 0.12
 const SQUEAL_OFF: float = 0.04
+## Loose surface: the slide starts earlier than the asphalt squeal (dirt
+## slides at lower tyre usage, and a slide there is normal, not an alarm).
+const DIRT_SLIDE_FROM: float = 1.0
+const DIRT_SLIDE_SPAN: float = 0.5
+const DIRT_SLIP_FROM_DEG: float = 6.0
+const DIRT_ROLL_FULL: float = 8.0 ## u/s at which the roll is at full level
 const TYRE_ATTACK: float = 0.06
 const TYRE_RELEASE: float = 0.18
 ## Chassis.
@@ -84,6 +92,9 @@ var gear: int = 1
 var load: float = 0.0
 var squeal: float = 0.0
 var skid: float = 0.0
+var dirt_roll: float = 0.0
+var dirt_slide: float = 0.0
+var dirt_share: float = 0.0 ## grounded wheels on a loose surface, 0..1
 var engine_weights: PackedFloat32Array = []
 var engine_pitches: PackedFloat32Array = []
 var events: Array = [] ## recent one-shots: [time s, role, volume 0..1]
@@ -94,6 +105,8 @@ var _engine_rpm: PackedFloat32Array = []
 var _engine_gain: PackedFloat32Array = []
 var _squeal: AudioStreamPlayer
 var _skid: AudioStreamPlayer
+var _dirt_roll: AudioStreamPlayer
+var _dirt_slide: AudioStreamPlayer
 var _nitro: AudioStreamPlayer
 var _shots: Dictionary = {} ## role -> AudioStreamPlayer
 var _shift_t: float = 0.0
@@ -124,6 +137,8 @@ func _ready() -> void:
 		return
 	_squeal = _loop_player("tyre_squeal", &"Tyres")
 	_skid = _loop_player("tyre_skid", &"Tyres")
+	_dirt_roll = _loop_player("dirt_roll", &"Tyres")
+	_dirt_slide = _loop_player("dirt_slide", &"Tyres")
 	_nitro = _loop_player("nitro_sustain", &"Effects")
 	for role: String in ["land", "kerb", "impact_solid", "impact_cone", "nitro_ignite"]:
 		var s := table.stream(role)
@@ -161,6 +176,8 @@ func reset() -> void:
 	gear = 1
 	squeal = 0.0
 	skid = 0.0
+	dirt_roll = 0.0
+	dirt_slide = 0.0
 	_shift_t = 0.0
 	_was_air = 0.0
 	_prev_v = car.linear_velocity
@@ -182,7 +199,7 @@ func _physics_process(delta: float) -> void:
 	_update_nitro()
 	_apply()
 	if director != null:
-		director.squeal_level = maxf(squeal, skid) * _fade
+		director.squeal_level = maxf(maxf(squeal, skid), dirt_slide * 0.6) * _fade
 
 
 func _update_engine(delta: float) -> void:
@@ -257,11 +274,36 @@ func _update_tyres(delta: float) -> void:
 		_squeal_gate = false
 	if not _squeal_gate:
 		want_squeal = 0.0
+	# Loose surface: share of grounded wheels on it; the asphalt sounds give way.
+	var loose := 0.0
+	var grounded := 0
+	for i in 4:
+		var sf: StringName = car.wheel_surface[i]
+		if sf == &"":
+			continue
+		grounded += 1
+		if Surfaces.get_value(sf, "sound", "asphalt") == "dirt":
+			loose += 1.0
+	dirt_share = loose / grounded if grounded > 0 else 0.0
+	var want_roll := pow(clampf(speed / DIRT_ROLL_FULL, 0.0, 1.0), 0.7) * dirt_share
+	var d_slide := clampf((usage - DIRT_SLIDE_FROM) / DIRT_SLIDE_SPAN, 0.0, 1.0)
+	var d_slip := clampf((absf(rad_to_deg(car.slip_angle)) - DIRT_SLIP_FROM_DEG) / SLIP_SPAN_DEG, 0.0, 1.0)
+	var want_dslide := maxf(d_slide, d_slip)
+	if drifting:
+		want_dslide = maxf(want_dslide, clampf(absf(car.drift_angle) / deg_to_rad(20.0), 0.4, 1.0))
+	want_dslide *= clampf(speed / 3.0, 0.0, 1.0) * dirt_share
+	want_squeal *= 1.0 - dirt_share
+	want_skid *= 1.0 - dirt_share
 	if car.wheels_grounded == 0 or _since_landing < 0.2:
 		want_squeal = 0.0 # in the air, and the jolt of a landing (the thump covers it)
 		want_skid = 0.0 if car.wheels_grounded == 0 else want_skid
+		want_dslide = 0.0 if car.wheels_grounded == 0 else want_dslide
+	if car.wheels_grounded == 0:
+		want_roll = 0.0
 	squeal = _follow(squeal, want_squeal, delta)
 	skid = _follow(skid, want_skid, delta)
+	dirt_roll = _follow(dirt_roll, want_roll, delta)
+	dirt_slide = _follow(dirt_slide, want_dslide, delta)
 
 
 static func _follow(cur: float, want: float, delta: float) -> float:
@@ -343,6 +385,8 @@ func _apply() -> void:
 	var speed := car.linear_velocity.length()
 	_set_loop(_squeal, squeal * f, 0.9 + 0.18 * squeal + 0.012 * speed, table.gain_db("tyre_squeal"))
 	_set_loop(_skid, skid * f, 0.85 + 0.025 * speed, table.gain_db("tyre_skid"))
+	_set_loop(_dirt_roll, dirt_roll * f, clampf(0.75 + 0.04 * speed, 0.75, 1.3), table.gain_db("dirt_roll"))
+	_set_loop(_dirt_slide, dirt_slide * f, clampf(0.9 + 0.02 * speed, 0.9, 1.2), table.gain_db("dirt_slide"))
 	_set_loop(_nitro, car.nitro_level * f, 0.95 + 0.1 * car.nitro_level, table.gain_db("nitro_sustain"))
 
 

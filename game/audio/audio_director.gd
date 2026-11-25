@@ -57,6 +57,11 @@ const DEFAULT_OPPONENT_LEVEL: int = 3
 var opponent_level: int = DEFAULT_OPPONENT_LEVEL
 ## The isometric camera's zoom: 0 = AUTO, 1.. = FollowCamera.ZOOM_STEPS[n - 1].
 var zoom_setting: int = 0
+## The glyph size the player chose with - / = ([display] section; 0 = none, the
+## platform default applies) and the display scale (AsciiControls.display_scale)
+## it was chosen at, so it can be kept the same size on another display.
+var glyph_px: int = 0
+var glyph_scale: float = 1.0
 var settings_path: String = SETTINGS_PATH
 ## True when a volume or the mute changed since the settings were loaded or saved.
 var dirty: bool = false
@@ -178,7 +183,30 @@ func set_context(c: Context) -> void:
 		_sfx_db = -80.0 # the car goes silent at once
 
 
+## `--webaudiolog`: print the music players' state once a second (checking
+## the web build's audio start in a browser console).
+var _audio_log_t: float = -1.0
+
+
+func _log_audio(delta: float) -> void:
+	if _audio_log_t < 0.0:
+		if not OS.get_cmdline_user_args().has("--webaudiolog"):
+			return
+		_audio_log_t = 0.0
+	_audio_log_t += delta
+	if _audio_log_t < 1.0:
+		return
+	_audio_log_t = 0.0
+	var parts := PackedStringArray()
+	for n: String in _tracks:
+		var m: MusicLoop = _tracks[n]
+		var p: AudioStreamPlayer = m._players[m._active]
+		parts.append("%s level %.2f playing %s pos %.2f" % [n, m.level, p.playing, p.get_playback_position()])
+	print("[audio] t %.1f track %s context %d | %s" % [Time.get_ticks_msec() / 1000.0, _track, context, " | ".join(parts)])
+
+
 func _process(delta: float) -> void:
+	_log_audio(delta)
 	_frames += 1
 	if _quit_after_s > 0.0 and not _quitting:
 		_quit_after_s -= delta
@@ -288,6 +316,12 @@ func set_opponent_level(l: int) -> void:
 	dirty = true
 
 
+func set_glyph_choice(px: int, scale: float) -> void:
+	glyph_px = clampi(px, 0, 64)
+	glyph_scale = maxf(scale, 0.5)
+	dirty = true
+
+
 func set_zoom_setting(z: int) -> void:
 	zoom_setting = clampi(z, 0, FollowCamera.ZOOM_STEPS.size())
 	dirty = true
@@ -326,6 +360,7 @@ func stop_audition() -> void:
 
 
 func load_settings() -> void:
+	WebStore.restore(settings_path) # web: the browser's copy, if any
 	var cfg := ConfigFile.new()
 	if cfg.load(settings_path) != OK:
 		return
@@ -335,6 +370,8 @@ func load_settings() -> void:
 	muted = bool(cfg.get_value("audio", "muted", false))
 	opponent_level = clampi(int(cfg.get_value("game", "opponent", DEFAULT_OPPONENT_LEVEL)), 0, 5)
 	zoom_setting = clampi(int(cfg.get_value("game", "zoom", 0)), 0, FollowCamera.ZOOM_STEPS.size())
+	glyph_px = clampi(int(cfg.get_value("display", "glyph_px", 0)), 0, 64)
+	glyph_scale = maxf(float(cfg.get_value("display", "glyph_scale", 1.0)), 0.5)
 
 
 ## Writes the settings file if anything changed.
@@ -349,8 +386,13 @@ func save_settings() -> void:
 	cfg.set_value("audio", "muted", muted)
 	cfg.set_value("game", "opponent", opponent_level)
 	cfg.set_value("game", "zoom", zoom_setting)
+	if glyph_px > 0:
+		cfg.set_value("display", "glyph_px", glyph_px)
+		cfg.set_value("display", "glyph_scale", glyph_scale)
 	if cfg.save(settings_path) != OK:
 		push_warning("could not save audio settings to " + settings_path)
+	else:
+		WebStore.saved(settings_path) # web: also kept in the browser's localStorage
 
 
 func _exit_tree() -> void:

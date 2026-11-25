@@ -51,6 +51,11 @@ func _ready() -> void:
 	game.rumble.set_enabled(false)
 	game.tuning.save_path = out_dir.path_join("car_tuning.cfg")
 	game.countdown_enabled = false # the countdown scenario turns it on for itself
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--camtune="):
+			for kv in arg.trim_prefix("--camtune=").split(",", false):
+				var p := kv.split("=")
+				game.camera.set(p[0], float(p[1]))
 	renderer.fixed_output_size = SHOT_SIZE
 	_build_pad()
 	_run.call_deferred()
@@ -158,7 +163,7 @@ func _run() -> void:
 		if arg.begins_with("--dtonly="):
 			only = arg.trim_prefix("--dtonly=")
 	for t: String in ["spawn", "accel_brake", "corners", "limit", "nitro", "nitro_shots", "turns", "handbrake", "drift", "feel", "offroad", "kerbs", "tree", "cones", "jump", "bridge", "reset_bridge", "keys",
-			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots"]:
+			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting"]:
 		if only == "" or t in only.split(","):
 			await call("_test_" + t)
 	log_line("\n[summary] preset %s" % game.tuning.current)
@@ -3867,3 +3872,417 @@ func _window_shot(file: String) -> void:
 	for i in 3:
 		await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png(out_dir.path_join(file))
+
+
+
+# --- iso camera motion --------------------------------------------------------------
+
+## How calm the isometric camera is, over one lap each with the demo reel's
+## driver (the player's car) and the level-5 opponent's driver (the camera
+## following the opponent), in a 16:9 output, with AUTO and with the fixed 1.00
+## step. Per frame: the camera's velocity, acceleration and jerk (world units),
+## the car's position on screen (fractions of the screen height from the
+## centre) and how fast that changes, and direction reversals of that motion.
+func _test_camera_motion() -> void:
+	log_line("\n[camera motion] iso camera over a lap, 16:9 output")
+	renderer.fixed_output_size = SHOT_SIZE
+	game.set_chase_view(false)
+	var keep: int = game.audio.zoom_setting
+	for setting: Array in [["AUTO", 0], ["fixed 1.00", 2]]:
+		game.audio.zoom_setting = setting[1]
+		camera.zoom_choice = setting[1]
+		for who: String in ["reel driver", "opponent L5"]:
+			var target: Car = car
+			var drv: Node
+			var opp: Opponent = null
+			if who == "reel driver":
+				_opp_off()
+				car.teleport(world.grid_pose())
+				game.laps.reset()
+				var d := DemoDriver.new()
+				d.car = car
+				d.track = track
+				d.rng_seed = 7
+				add_child(d)
+				d.reset_requested.connect(func() -> void:
+					game.reset_car()
+					d.restart())
+				drv = d
+			else:
+				opp = _opp_on(5)
+				_park_player()
+				target = opp.car
+				camera.target = target
+			await _frames(2)
+			camera.snap_to_target()
+			var r := await _record_camera(target, 120 * 18)
+			if drv != null:
+				drv.queue_free()
+			camera.target = car
+			car.freeze = false
+			_inputs(0.0, 0.0, 1.0, false)
+			var line := "%s, %s: camera accel rms %.1f peak %.1f, jerk rms %.0f peak %.0f u/s^3; car on screen: offset rms %.3f peak %.3f, speed rms %.3f peak %.3f screen/s, reversals %d; zoom rate rms %.2f peak %.2f %%/s" % [
+				setting[0], who, r.acc_rms, r.acc_peak, r.jerk_rms, r.jerk_peak, r.off_rms, r.off_peak, r.sv_rms, r.sv_peak, r.rev, r.z_rms, r.z_peak]
+			log_line("  " + line)
+			log_line("    hairpin: %s; esses: %s" % [r.hairpin, r.esses])
+			_m["motion %s %s" % [setting[0], who]] = "acc %.1f/%.1f jerk %.0f/%.0f screen %.3f/%.3f rev %d" % [r.acc_rms, r.acc_peak, r.jerk_rms, r.jerk_peak, r.sv_rms, r.sv_peak, r.rev]
+			_opp_off()
+	game.audio.zoom_setting = keep
+	camera.zoom_choice = keep
+	car.teleport(world.grid_pose())
+	camera.snap_to_target()
+	await _frames(10)
+
+
+## Records the iso camera and `target` for `n` frames (fixed 120 fps): see
+## _test_camera_motion. Derivatives are smoothed over a few frames (a 25 ms
+## window) so the sampling does not dominate.
+func _record_camera(target: Node3D, n: int) -> Dictionary:
+	var pos: Array[Vector3] = []
+	var scr: Array[Vector2] = []
+	var sizes: PackedFloat32Array = []
+	var prog: PackedFloat32Array = []
+	var p_s := -1.0
+	for i in n:
+		await get_tree().process_frame
+		var cam := renderer.scene_viewport.get_camera_3d()
+		pos.append(camera.global_position)
+		var vs := Vector2(renderer.scene_viewport.size)
+		var p := cam.unproject_position(target.get_global_transform_interpolated().origin)
+		scr.append((p - vs * 0.5) / vs.y)
+		sizes.append(camera.size)
+		p_s = track.progress(target.global_position, p_s)
+		prog.append(fposmod(p_s, track.length))
+	var dt := 1.0 / 120.0
+	var k := 3 # frames per difference step
+	var vel: Array[Vector3] = []
+	for i in range(k, pos.size()):
+		vel.append((pos[i] - pos[i - k]) / (k * dt))
+	var acc: Array[Vector3] = []
+	for i in range(k, vel.size()):
+		acc.append((vel[i] - vel[i - k]) / (k * dt))
+	var res := {"acc_rms": 0.0, "acc_peak": 0.0, "jerk_rms": 0.0, "jerk_peak": 0.0, "off_rms": 0.0, "off_peak": 0.0,
+		"sv_rms": 0.0, "sv_peak": 0.0, "rev": 0, "z_rms": 0.0, "z_peak": 0.0}
+	var s2 := 0.0
+	for a in acc:
+		s2 += a.length_squared()
+		res.acc_peak = maxf(res.acc_peak, a.length())
+	res.acc_rms = sqrt(s2 / maxf(acc.size(), 1))
+	s2 = 0.0
+	var nj := 0
+	for i in range(k, acc.size()):
+		var j := (acc[i] - acc[i - k]) / (k * dt)
+		s2 += j.length_squared()
+		nj += 1
+		res.jerk_peak = maxf(res.jerk_peak, j.length())
+	res.jerk_rms = sqrt(s2 / maxf(nj, 1))
+	s2 = 0.0
+	for o in scr:
+		s2 += o.length_squared()
+		res.off_peak = maxf(res.off_peak, o.length())
+	res.off_rms = sqrt(s2 / maxf(scr.size(), 1))
+	# Screen speed of the car, and reversals with hysteresis (per axis: the
+	# speed must go from above +0.05 to below -0.05 screen/s or back).
+	s2 = 0.0
+	var state := [0, 0]
+	for i in range(k, scr.size()):
+		var sv := (scr[i] - scr[i - k]) / (k * dt)
+		s2 += sv.length_squared()
+		res.sv_peak = maxf(res.sv_peak, sv.length())
+		for ax in 2:
+			var v := sv[ax]
+			var st := 1 if v > 0.05 else (-1 if v < -0.05 else 0)
+			if st != 0:
+				if state[ax] != 0 and st != state[ax]:
+					res.rev += 1
+				state[ax] = st
+	res.sv_rms = sqrt(s2 / maxf(scr.size() - k, 1))
+	s2 = 0.0
+	for i in range(k, sizes.size()):
+		var zr := absf(sizes[i] - sizes[i - k]) / (k * dt) / sizes[i] * 100.0
+		s2 += zr * zr
+		res.z_peak = maxf(res.z_peak, zr)
+	res.z_rms = sqrt(s2 / maxf(sizes.size() - k, 1))
+	# Per section: peak car screen speed and peak camera jerk (the hairpin, where
+	# the level-5 driver drifts, and the esses).
+	for sec: Array in [["hairpin", 108.0, 130.0], ["esses", 58.0, 72.0]]:
+		var svp := 0.0
+		var jp := 0.0
+		for i in range(3 * k, scr.size()):
+			if prog[i] < sec[1] or prog[i] > sec[2]:
+				continue
+			svp = maxf(svp, ((scr[i] - scr[i - k]) / (k * dt)).length())
+			var ia := i - 2 * k # index into acc (offset by 2k from pos)
+			if ia >= k and ia < acc.size():
+				jp = maxf(jp, ((acc[ia] - acc[ia - k]) / (k * dt)).length())
+		res[sec[0]] = "screen speed peak %.3f, jerk peak %.0f" % [svp, jp]
+	return res
+
+
+
+# --- finish gate ----------------------------------------------------------------------
+
+## The finish gate: its visible legs against its colliders, deliberate hits on
+## each leg (head on and glancing), and contacts over laps of the reel driver
+## and the opponent at every level from a two-car grid.
+func _test_gate() -> void:
+	log_line("\n[gate] finish gate over the start line")
+	var g: StaticBody3D = world.gate
+	var inv := g.global_transform.affine_inverse()
+	for mi: MeshInstance3D in g.find_children("*", "MeshInstance3D", true, false):
+		var bb := inv * (mi.global_transform * mi.mesh.get_aabb())
+		log_line("  mesh %s: x %.2f..%.2f, y %.2f..%.2f, z %.2f..%.2f (gate space; x across the road)" % [mi.name, bb.position.x, bb.end.x, bb.position.y, bb.end.y, bb.position.z, bb.end.z])
+	# The legs: every face vertex below 1.2 high, per side, in gate space.
+	for mi: MeshInstance3D in g.find_children("*", "MeshInstance3D", true, false):
+		var xf := inv * mi.global_transform
+		var faces := mi.mesh.get_faces()
+		for side: float in [-1.0, 1.0]:
+			for band: Vector2 in [Vector2(0.0, 0.2), Vector2(0.2, 0.4), Vector2(0.4, 0.6), Vector2(0.6, 0.8), Vector2(0.8, 1.0), Vector2(1.0, 1.3), Vector2(1.3, 1.9)]:
+				# Triangles crossing the band: clip each edge to the band's height range.
+				var lo := Vector3(INF, INF, INF)
+				var hi := -lo
+				for t in faces.size() / 3:
+					var tri := [xf * faces[t * 3], xf * faces[t * 3 + 1], xf * faces[t * 3 + 2]]
+					for e in 3:
+						var a3: Vector3 = tri[e]
+						var b3: Vector3 = tri[(e + 1) % 3]
+						for f in 11:
+							var q := a3.lerp(b3, f / 10.0)
+							if q.y >= band.x and q.y <= band.y and q.x * side > 0.3:
+								lo = lo.min(q)
+								hi = hi.max(q)
+				log_line("  visible %s leg, height %.1f..%.1f: x %.2f..%.2f, z %.2f..%.2f" % ["left" if side < 0.0 else "right", band.x, band.y, lo.x, hi.x, lo.z, hi.z])
+	for cs: CollisionShape3D in g.find_children("*", "CollisionShape3D", true, false):
+		var b := cs.shape as BoxShape3D
+		var hull := cs.shape as ConvexPolygonShape3D
+		if hull != null:
+			var bb := AABB(hull.points[0], Vector3.ZERO)
+			for q in hull.points:
+				bb = bb.expand(q)
+			log_line("  collider %s: hull of %d points, x %.2f..%.2f, y %.2f..%.2f, z %.2f..%.2f" % [cs.name, hull.points.size(), bb.position.x, bb.end.x, bb.position.y, bb.end.y, bb.position.z, bb.end.z])
+		else:
+			log_line("  collider at %s size %s" % [cs.position, b.size if b != null else "?"])
+	log_line("  road half width %.2f, kerb %.2f" % [Track.ROAD_HALF_WIDTH, Track.KERB_WIDTH])
+	_opp_off()
+	# Deliberate hits: along the road toward each leg, head on and at 12 deg.
+	var s0 := Track.START_S
+	for side: float in [-1.0, 1.0]:
+		for angle: float in [0.0, 12.0]:
+			var lat := side * (Track.ROAD_HALF_WIDTH + Track.KERB_WIDTH + 0.15) - side * (0.0 if angle == 0.0 else 0.6)
+			var xf := track.pose_at(s0 - 3.0, lat)
+			if angle != 0.0:
+				xf.basis = xf.basis.rotated(Vector3.UP, deg_to_rad(-angle * side))
+			car.teleport(xf)
+			car.linear_velocity = -xf.basis.z * 8.0
+			game.laps.resync()
+			var ev0: int = game.car_audio.events.size()
+			var touched := false
+			var v_min := INF
+			for i in 120:
+				_inputs(0.0, 0.6, 0.0, false)
+				await _frames(1)
+				if car.get_colliding_bodies().has(g):
+					touched = true
+				v_min = minf(v_min, car.linear_velocity.length())
+			_inputs(0.0, 0.0, 1.0, false)
+			var rel: Vector3 = inv * car.global_position
+			var sounds: Array = game.car_audio.events.slice(ev0)
+			log_line("  hit %s leg at %d deg: touched %s, lowest speed %.2f, %s (car centre at gate z %.2f; the leg is z -0.24..0.24), sounds %s" % [
+				"left" if side < 0.0 else "right", angle, touched, v_min, "stopped short of the leg" if rel.z < -0.3 else "got through", rel.z, str(sounds)])
+			_m["gate hit %s %d" % ["L" if side < 0.0 else "R", angle]] = "touched %s, min speed %.2f" % [touched, v_min]
+			await _frames(30)
+	# Laps: contacts with the gate.
+	for lv: int in [0, 1, 2, 3, 4, 5]:
+		var contacts := 0
+		var frames := 0
+		if lv == 0:
+			car.teleport(world.grid_pose())
+			game.laps.reset()
+			var d := DemoDriver.new()
+			d.car = car
+			d.track = track
+			d.rng_seed = 7
+			add_child(d)
+			d.reset_requested.connect(func() -> void:
+				game.reset_car()
+				d.restart())
+			for i in 120 * 50:
+				await _frames(1)
+				if car.get_colliding_bodies().has(g):
+					contacts += 1
+			d.queue_free()
+			log_line("  reel driver, 50 s (about 3 laps) from the grid: frames touching the gate %d" % contacts)
+			_m["gate reel driver"] = contacts
+		else:
+			var opp := _opp_on(lv)
+			opp.car.contact_monitor = true
+			opp.car.max_contacts_reported = maxi(opp.car.max_contacts_reported, 4)
+			var ap := Autopilot.new()
+			ap.car = car
+			ap.track = track
+			add_child(ap)
+			var mine := 0
+			for i in 120 * 40:
+				await _frames(1)
+				if opp.car.get_colliding_bodies().has(g):
+					contacts += 1
+				if car.get_colliding_bodies().has(g):
+					mine += 1
+			_stop_line(ap)
+			log_line("  opponent level %d, 40 s from a two-car grid (%s): frames touching the gate: opponent %d, player (autopilot) %d" % [lv, opp.status_text(), contacts, mine])
+			_m["gate opp L%d" % lv] = "%d / player %d" % [contacts, mine]
+			_opp_off()
+	_inputs(0.0, 0.0, 1.0, false)
+	await _frames(30)
+
+
+
+# --- camera tip before the first lights ----------------------------------------------
+
+func _test_camera_tip() -> void:
+	log_line("\n[camera tip] the camera note before a game's first lights, and the corner legend")
+	var rs: RaceStart = game.race_start
+	game.countdown_enabled = true
+	log_line("  control shown: \"%s\" (gamepads connected: %d)" % [RaceStart.camera_keys(), Input.get_connected_joypads().size()])
+	# Entering play as the reel does: tip pending, grid, then the opponent re-grids.
+	_opp_off()
+	game.audio.opponent_level = 3
+	rs.tip_pending = true
+	game.reset_to_grid()
+	game.update_opponent(true)
+	var shown := rs.tip_left > 0.0
+	var frames := 0
+	var legend_during := ""
+	var legend_after := ""
+	var faded_at := -1.0
+	while rs._lit == 0 and frames < 120 * 10:
+		await get_tree().process_frame
+		frames += 1
+		if frames == 120:
+			await _shot("99_tip_iso.png")
+			legend_during = game.controls.legend_extra
+		if faded_at < 0.0 and rs.tip_left < 0.0:
+			faded_at = frames / 120.0
+	await get_tree().process_frame
+	legend_after = game.controls.legend_extra
+	log_line("  first start: tip shown %s, gone after %.2f s (hold %.1f s), first lamp after %.2f s, cars held %s; legend extra during the tip \"%s\", after \"%s\"" % [
+		shown, faded_at, RaceStart.TIP_TIME, frames / 120.0, car.freeze, legend_during, legend_after])
+	_m["tip first start"] = "shown %s, gone %.2f s, first lamp %.2f s, legend during \"%s\" after \"%s\"" % [shown, faded_at, frames / 120.0, legend_during, legend_after]
+	# Restart and opponent on: no tip, the legend keeps the hint.
+	rs.cancel()
+	game.reset_to_grid()
+	var restart_tip := rs.tip_left > 0.0
+	_opp_off()
+	game.audio.opponent_level = 2
+	game.update_opponent(true)
+	var opp_tip := rs.tip_left > 0.0
+	await get_tree().process_frame
+	log_line("  restart: tip %s; opponent switched on: tip %s; legend \"%s\"" % [restart_tip, opp_tip, game.controls.legend_extra])
+	_m["tip restart / opponent on"] = "%s / %s" % [restart_tip, opp_tip]
+	# The camera control dismisses it and switches the view; the lights then begin.
+	rs.cancel()
+	rs.tip_pending = true
+	game.reset_to_grid()
+	await _frames(30)
+	game.controls.enabled = true
+	var ev := InputEventAction.new()
+	ev.action = &"camera_toggle"
+	ev.pressed = true
+	Input.parse_input_event(ev)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var ev2 := InputEventAction.new()
+	ev2.action = &"camera_toggle"
+	ev2.pressed = false
+	Input.parse_input_event(ev2)
+	await _frames(2)
+	log_line("  camera control during the tip: chase view %s, tip gone %s" % [game.chase_view, rs.tip_left < 0.0])
+	_m["tip dismiss"] = "chase %s, gone %s" % [game.chase_view, rs.tip_left < 0.0]
+	# Chase screenshot with the tip.
+	rs.cancel()
+	rs.tip_pending = true
+	game.reset_to_grid()
+	await _frames(40)
+	await _shot("99_tip_chase.png")
+	game.set_chase_view(false)
+	# Window captures: the tip, and the final legend (keyboard and pad) with the
+	# gantry, at 16:9 and 21:9, default and Retina glyphs; the legend's plate is
+	# checked against the gantry's rectangle.
+	var win0 := get_window().size
+	var px0 := renderer.settings.glyph_px
+	renderer.fixed_output_size = Vector2i.ZERO
+	for w: Array in [["16x9", Vector2i(1600, 900)], ["21x9", Vector2i(2100, 900)]]:
+		get_window().size = w[1]
+		for gpx: Array in [["default", px0], ["retina", 20]]:
+			if renderer.settings.glyph_px != gpx[1]:
+				renderer.settings.glyph_px = gpx[1]
+				await renderer.atlas_ready
+			rs.cancel()
+			rs.tip_pending = true
+			game.reset_to_grid()
+			await _frames(40)
+			await _window_shot("99_tip_window_%s_%s.png" % [w[0], gpx[0]])
+			for pad: bool in [false, true]:
+				RaceStart.assume_pad = pad
+				rs.cancel()
+				game.reset_to_grid() # a later start: no tip, the hint is in the legend
+				await _frames(40)
+				var name := "99_legend_%s_%s_%s.png" % [w[0], gpx[0], "pad" if pad else "keys"]
+				await _window_shot(name)
+				var lg: Rect2 = game.controls.legend.get_global_rect()
+				var g := rs.gantry_rect
+				var k := Vector2(renderer.pitch) * Vector2(get_window().size) / Vector2(renderer.output_size)
+				var gpxr := Rect2(g.position * k, g.size * k)
+				log_line("  %s: legend \"%s\" at %s, gantry at %s, overlap %s" % [name, game.controls.legend_extra, lg, gpxr, lg.intersects(gpxr)])
+				_m["legend " + name] = "overlap %s" % lg.intersects(gpxr)
+	RaceStart.assume_pad = false
+	if renderer.settings.glyph_px != px0:
+		renderer.settings.glyph_px = px0
+		await renderer.atlas_ready
+	get_window().size = win0
+	renderer.fixed_output_size = SHOT_SIZE
+	rs.cancel()
+	_opp_off()
+	game.countdown_enabled = false
+	game.controls.enabled = false
+	await _frames(10)
+
+
+
+## The glyph size the player sets with - / = is saved with the settings: set,
+## saved, read back by a fresh load (and rescaled for another display density),
+## and stepping back to the default clears it.
+func _test_glyph_setting() -> void:
+	log_line("\n[glyph setting] glyph size saved with the settings")
+	var au: AudioDirector = game.audio
+	var def: int = game.default_glyph_px()
+	game.controls.enabled = true
+	for i in 2:
+		_key(KEY_EQUAL, true)
+		_key(KEY_EQUAL, false)
+		await _frames(2)
+	for f in 120: # the atlas rebuild may already be done; never wait for a signal that has fired
+		if renderer.is_atlas_ready():
+			break
+		await get_tree().process_frame
+	var file := FileAccess.get_file_as_string(au.settings_path)
+	var fresh := AudioDirector.new()
+	fresh.settings_path = au.settings_path
+	fresh.load_settings()
+	var on_2x := clampi(roundi(fresh.glyph_px * 2.0 / fresh.glyph_scale), 6, 64)
+	log_line("  default %d px; after = twice: %d px, saved glyph_px %d at scale %.1f, file has [display] %s; fresh load reads %d px (on a 2x display it would be %d px)" % [
+		def, renderer.settings.glyph_px, au.glyph_px, au.glyph_scale, file.contains("[display]"), fresh.glyph_px, on_2x])
+	_m["glyph saved"] = "%d px saved, fresh load %d, 2x %d" % [au.glyph_px, fresh.glyph_px, on_2x]
+	fresh.free()
+	for i in 2:
+		_key(KEY_MINUS, true)
+		_key(KEY_MINUS, false)
+		await _frames(2)
+	for f in 120: # the atlas rebuild may already be done; never wait for a signal that has fired
+		if renderer.is_atlas_ready():
+			break
+		await get_tree().process_frame
+	file = FileAccess.get_file_as_string(au.settings_path)
+	log_line("  back to %d px with - twice: saved glyph_px %d, file has [display] %s" % [renderer.settings.glyph_px, au.glyph_px, file.contains("[display]")])
+	_m["glyph reset"] = "saved %d, section %s" % [au.glyph_px, file.contains("[display]")]
+	game.controls.enabled = false

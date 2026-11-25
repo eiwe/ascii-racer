@@ -176,6 +176,8 @@ const PROMPT_ACCENT: Color = Color("ff8a1f")
 const DONE: float = PROMPT_IN
 
 var overlay: AsciiOverlay
+## What draw_prompt() says (the web build's start screen says something else).
+var prompt_text: String = PROMPT
 var atlas: GlyphAtlas
 ## Size of a cell in pixels (renderer pitch), for the unit aspect.
 var pitch: Vector2i = Vector2i(5, 10)
@@ -555,10 +557,10 @@ func draw_prompt(t: float) -> void:
 		return
 	var pixel := PROMPT_PIXEL
 	var slant := PROMPT_SLANT
-	if mini_width(PROMPT, pixel, slant) > PROMPT_MAX_WIDTH * overlay.cols:
+	if mini_width(prompt_text, pixel, slant) > PROMPT_MAX_WIDTH * overlay.cols:
 		pixel = Vector2i.ONE
 		slant = 0
-	var w := mini_width(PROMPT, pixel, slant)
+	var w := mini_width(prompt_text, pixel, slant)
 	var x := (overlay.cols - w) / 2
 	var y := int(PROMPT_Y * overlay.rows)
 	var h := 5 * pixel.y
@@ -575,4 +577,4 @@ func draw_prompt(t: float) -> void:
 		var c := PROMPT_ACCENT.lerp(Color.BLACK, 1.0 - fade_in * clampf(edge * 1.5, 0.0, 1.0))
 		overlay.put(xx, y - 2, rule, c)
 		overlay.put(xx, y + h + 1, rule, c)
-	draw_mini(PROMPT, x, y, pixel, slant, func(_f: float) -> Color: return PROMPT_INK.lerp(Color.BLACK, 1.0 - k), 0.0)
+	draw_mini(prompt_text, x, y, pixel, slant, func(_f: float) -> Color: return PROMPT_INK.lerp(Color.BLACK, 1.0 - k), 0.0)

@@ -142,6 +142,7 @@ func _begin_play() -> void:
 	g.car.apply_tuning(_player_values)
 	g.tuning.current = _player_preset
 	g.car.nitro_enabled = true
+	g.race_start.tip_pending = true # the camera tip before this game's first lights
 	g.reset_to_grid()
 	g.update_opponent(true)
 	g.set_chase_view(false)

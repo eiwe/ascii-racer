@@ -23,6 +23,10 @@ const SAFE_POSE_INTERVAL: float = 0.25
 const FLASH_TIME: float = 1.5
 ## Default glyph size on a Retina Mac (the normal default is AsciiSettings.glyph_px).
 const RETINA_GLYPH_PX: int = 20
+## Web build: default glyph size at a device pixel ratio of 2 (the page is drawn
+## in device pixels); between 1 and 2 it is interpolated from the normal default,
+## above 2 it grows in proportion.
+const WEB_HIDPI_GLYPH_PX: int = 16
 
 @onready var renderer: AsciiRenderer = $AsciiRenderer
 # The renderer moves its children into its SceneViewport during its own _ready.
@@ -53,6 +57,9 @@ var opponent: Opponent
 ## The start lights (every start from the grid). Scripted tests turn them off.
 var race_start: RaceStart
 var countdown_enabled: bool = true
+## Web only, until the first key or click: the start screen that lets the
+## browser switch on sound before the reel (see WebStart).
+var web_start: WebStart
 
 var _safe_pose: Transform3D
 var _safe_timer: float = 0.0
@@ -78,8 +85,8 @@ func _ready() -> void:
 	_safe_pose = world.grid_pose()
 
 	# On a Retina Mac the default 9 px glyphs are too small to read as characters.
-	if AsciiControls.display_scale() >= 2.0:
-		renderer.settings.glyph_px = RETINA_GLYPH_PX
+	_web_ratio = AsciiControls.display_scale()
+	renderer.settings.glyph_px = default_glyph_px()
 
 	controls = AsciiControls.new()
 	controls.renderer = renderer
@@ -125,6 +132,12 @@ func _ready() -> void:
 	audio = AudioDirector.new()
 	audio.name = "Audio"
 	add_child(audio)
+	# A glyph size the player chose (saved with the settings) replaces the
+	# platform default; scripted runs keep the default so their output does not
+	# depend on the settings file.
+	if not scripted_run() and audio.glyph_px > 0:
+		renderer.settings.glyph_px = chosen_glyph_px()
+	controls.glyph_size_changed.connect(_on_glyph_size_changed)
 	car_audio = CarAudio.new()
 	car_audio.name = "CarAudio"
 	car_audio.car = car
@@ -177,14 +190,25 @@ func _ready() -> void:
 			add_child(test)
 			scripted = true
 	if not scripted and OS.get_cmdline_user_args().has("--play"):
+		race_start.tip_pending = true # the camera tip before the first lights
 		reset_to_grid() # the start lights
 		update_opponent(true)
 	if not scripted and not OS.get_cmdline_user_args().has("--play"):
 		attract = Attract.new()
 		attract.game = self
 		add_child(attract)
-		attract.start(true)
 		nitro_hud.attract = attract
+		if WebStart.needed():
+			# The browser has not allowed sound yet: the first key or click
+			# switches it on and then starts the reel (and its music) from the top.
+			web_start = WebStart.new()
+			web_start.game = self
+			web_start.finished.connect(func() -> void:
+				web_start = null
+				attract.start(true))
+			add_child(web_start)
+		else:
+			attract.start(true)
 		for arg in OS.get_cmdline_user_args():
 			if arg.begins_with("--attracttest="):
 				var at := AttractTest.new()
@@ -317,14 +341,118 @@ func reset_car() -> void:
 	chase.snap_to_target()
 
 
+var _display_log_t: float = -1.0
+var _web_ratio: float = 1.0
+var _web_ratio_t: float = 0.0
+
+
+## The default glyph size here: AsciiSettings' (9 px), 20 px on a Retina Mac,
+## and on the web by the device pixel ratio (web_glyph_px).
+func default_glyph_px() -> int:
+	if OS.has_feature("web"):
+		return web_glyph_px(AsciiControls.display_scale())
+	if AsciiControls.display_scale() >= 2.0:
+		return RETINA_GLYPH_PX
+	return AsciiSettings.new().glyph_px
+
+
+## The player's saved glyph size, kept the same physical size on this display:
+## scaled by this display's scale over the one it was chosen at (24 px chosen
+## on a 2x screen is 12 px on a 1x one), within 6..64 px. 0 if none is saved.
+func chosen_glyph_px() -> int:
+	if audio == null or audio.glyph_px <= 0:
+		return 0
+	return clampi(roundi(audio.glyph_px * AsciiControls.display_scale() / audio.glyph_scale), 6, 64)
+
+
+## True for the scripted runs (drive test, reel checks, the movie writer used for
+## the README media): they keep the default look whatever the settings file says.
+static func scripted_run() -> bool:
+	if Engine.get_write_movie_path() != "":
+		return true
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--drivetest=") or arg.begins_with("--attracttest=") or arg.begins_with("--attractshots="):
+			return true
+	return false
+
+
+## - / = changed the glyph size: remember it (stepping back to the default
+## forgets it, so a later change of the default still reaches this player).
+func _on_glyph_size_changed(px: int) -> void:
+	if px == default_glyph_px():
+		audio.set_glyph_choice(0, 1.0)
+	else:
+		audio.set_glyph_choice(px, AsciiControls.display_scale())
+	audio.save_settings()
+
+
+## Web build: the default glyph size for a device pixel ratio.
+static func web_glyph_px(ratio: float) -> int:
+	var base := AsciiSettings.new().glyph_px
+	if ratio <= 1.0:
+		return base
+	if ratio <= 2.0:
+		return roundi(lerpf(base, WEB_HIDPI_GLYPH_PX, ratio - 1.0))
+	return roundi(WEB_HIDPI_GLYPH_PX * ratio / 2.0)
+
+
+## Web build: the device pixel ratio changes with browser zoom or a move to
+## another monitor. The text of the HUD, legend and tuning panel follows, and
+## so does the glyph size unless the player has set it themselves.
+func _check_web_ratio(delta: float) -> void:
+	_web_ratio_t += delta
+	if _web_ratio_t < 0.5:
+		return
+	_web_ratio_t = 0.0
+	var r := AsciiControls.display_scale()
+	if is_equal_approx(r, _web_ratio):
+		return
+	if audio.glyph_px > 0:
+		_web_ratio = r
+		renderer.settings.glyph_px = chosen_glyph_px() # the player's size, same physical size
+	elif renderer.settings.glyph_px == web_glyph_px(_web_ratio):
+		renderer.settings.glyph_px = web_glyph_px(r)
+	_web_ratio = r
+	controls.apply_scale()
+	panel.apply_scale()
+
+
+## `--webdisplaylog`: print the display scale and sizes every two seconds
+## (checking the web build's HiDPI handling in a browser console).
+func _log_display(delta: float) -> void:
+	if _display_log_t < 0.0:
+		if not OS.get_cmdline_user_args().has("--webdisplaylog"):
+			return
+		_display_log_t = 2.0
+	_display_log_t += delta
+	if _display_log_t < 2.0:
+		return
+	_display_log_t = 0.0
+	print("[settings] master %.2f music %.2f sfx %.2f muted %s opponent %d zoom %d, tuning presets %s current %s" % [
+		audio.master_volume, audio.music_volume, audio.sfx_volume, audio.muted, audio.opponent_level, audio.zoom_setting,
+		tuning.names, tuning.current])
+	print("[display] screen scale %.2f, window %s, output %s, grid %dx%d, glyph %d px, HUD scale %.2f" % [
+		DisplayServer.screen_get_scale(), get_window().size, renderer.output_size, renderer.cols, renderer.rows,
+		renderer.settings.glyph_px, AsciiControls.display_scale()])
+
+
 func _process(delta: float) -> void:
+	_log_display(delta)
+	if OS.has_feature("web"):
+		_check_web_ratio(delta)
 	nitro_hud.race_text = opponent.status_text() if opponent != null and not race_start.counting else ""
 	camera.zoom_choice = audio.zoom_setting
+	# The camera shortcut joins the corner legend (once the start's camera tip,
+	# if any, has faded).
+	controls.legend_extra = "" if race_start.tip_showing() else RaceStart.camera_keys() + "  camera"
 	# The debug HUD's legend: not over the reel (logo, prompt) or the menu.
-	controls.legend_allowed = (attract == null or not attract.busy()) and not pause_menu.is_open
+	controls.legend_allowed = (attract == null or not attract.busy()) and not pause_menu.is_open and web_start == null
 	# Music and mix: the menu track leads under the reel, the race track is a
 	# bed under the car in play (the pause menu sets its own context).
-	if attract != null and attract.busy():
+	if web_start != null:
+		audio.set_context(AudioDirector.Context.MENU)
+		audio.play_music("") # nothing could be heard yet; the reel starts it from the top
+	elif attract != null and attract.busy():
 		audio.set_context(AudioDirector.Context.MENU)
 		audio.play_music("menu")
 	else:
@@ -375,6 +503,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed(&"camera_toggle"):
 		set_chase_view(not chase_view)
 		flash("chase view" if chase_view else "iso view")
+		race_start.dismiss_tip()
 		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed(&"rumble_toggle"):

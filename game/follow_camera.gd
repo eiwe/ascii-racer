@@ -3,12 +3,12 @@
 ## static world scrolls in whole cells (no glyph shimmer).
 ##
 ## Zoom (`zoom_choice`, the pause menu's ZOOM setting): a fixed step is a plain
-## multiplier on the base zoom (ZOOM_LEVELS[zoom_index], the , . keys). AUTO
-## (the default) frames a window narrower than 21:9 so it shows about as much
-## road ahead as a 21:9 window did with the fixed framing: mostly by looking
-## further ahead (the car sits behind the centre and the road ahead gets the
-## screen), partly by zooming out a little by aspect and, slowly, with speed.
-## At 21:9 and wider AUTO is exactly the fixed framing at 1x.
+## multiplier on the base zoom (ZOOM_LEVELS[zoom_index], the , . keys) with the
+## car centred. AUTO (the default) frames a window narrower than 21:9 so it
+## shows about as much road ahead as a 21:9 window does: mostly by looking
+## further ahead with calm, heavily smoothed motion (see GLIDE_*), partly by
+## zooming out a little by aspect. At 21:9 and wider AUTO is exactly the fixed
+## framing at 1x.
 class_name FollowCamera
 extends Camera3D
 
@@ -22,26 +22,37 @@ const ZOOM_DEFAULT: int = 3
 const ZOOM_STEPS: Array[float] = [0.85, 1.0, 1.15, 1.3, 1.5]
 
 ## AUTO. "Narrowness" n: 0 at 21:9 and wider, 1 at 16:9, more for narrower
-## windows (capped). Everything AUTO adds scales with n.
+## windows (capped). At n = 0 AUTO is exactly the fixed framing at 1x.
 const AUTO_WIDE_ASPECT: float = 21.0 / 9.0
 const AUTO_REF_ASPECT: float = 16.0 / 9.0
 const AUTO_NARROW_MAX: float = 1.6
-## Zoom out by n x (aspect part + speed part x speed / AUTO_SPEED_REF), at most
-## AUTO_ZOOM_MAX (the car stays at least 1 / 1.3 = 77% of its fixed-zoom size).
+## Zoom out by n x this, at most AUTO_ZOOM_MAX (the car stays at least 1 / 1.3 =
+## 77% of its fixed-zoom size). A constant for a given window: the zoom does not
+## move while the view travels.
 const AUTO_ASPECT_ZOOM: float = 0.12
-const AUTO_SPEED_ZOOM: float = 0.06
 const AUTO_ZOOM_MAX: float = 1.3
-const AUTO_SPEED_REF: float = 11.6
-## The speed used for zooming follows the car's speed this slowly (1/s), so the
-## zoom drifts rather than pumps (no hunting through esses or under braking).
-const AUTO_SPEED_RATE: float = 0.7
-## Extra look-ahead: n x this many seconds of travel more, up to n x this much
-## further, plus a standing bias along the car's heading (so the grid and slow
-## corners frame the road ahead too) that turns with the car at this rate (1/s).
-const AUTO_EXTRA_TIME: float = 0.25
-const AUTO_EXTRA_MAX: float = 1.6
-const AUTO_HEADING_BIAS: float = 0.8
-const AUTO_HEADING_RATE: float = 1.5
+## AUTO's framing for narrow windows ("glide"): rather than the fixed framing's
+## quick look-ahead, the camera looks ahead along a strongly smoothed velocity
+## (critically damped, so it never overshoots): on straights and fast bends the
+## road ahead gets the screen; through a hairpin the smoothed direction averages
+## out and the offset fades instead of swinging round, then grows again on the
+## exit, as one move. The camera follows the car's position with a critically
+## damped spring (continuous acceleration, no kicks), with the lag it would
+## build at a steady speed fed forward so the framing does not drift with speed.
+## A small bias along the car's heading frames the road ahead on the grid; it
+## turns very slowly, so spins and drifts do not swing the view.
+## Look-ahead: smoothed velocity x this many seconds (x n), at most this far (x n).
+var glide_ahead_time: float = 0.2
+var glide_ahead_max: float = 2.1
+## Angular frequencies (rad/s) of the velocity smoothing and of the follow spring.
+var glide_velocity_w: float = 0.9
+var glide_follow_w: float = 10.0
+## The velocity used to feed the follow spring's lag forward is smoothed only
+## lightly (rad/s), so it keeps up with the car through corners.
+var glide_feed_w: float = 8.0
+## Standing bias along the heading (x n) and its smoothing (rad/s).
+var glide_heading_bias: float = 0.8
+var glide_heading_w: float = 0.8
 
 @export var target: Node3D
 ## The renderer that draws this camera (provides the cell size for snapping).
@@ -66,9 +77,19 @@ var zoom_factor: float = 1.0
 
 ## Smoothed, unsnapped point the camera looks at (on the ground).
 var focus: Vector3 = Vector3.ZERO
+## The fixed framing's state (also AUTO's at n = 0).
+var _fixed_focus: Vector3 = Vector3.ZERO
 var _ahead: Vector3 = Vector3.ZERO
-var _bias: Vector3 = Vector3.ZERO
-var _speed_s: float = 0.0
+## AUTO's glide state: follow spring position and velocity, smoothed target
+## velocity and its rate, heading bias and its rate.
+var _gp: Vector3 = Vector3.ZERO
+var _gv: Vector3 = Vector3.ZERO
+var _sv: Vector3 = Vector3.ZERO
+var _sv_rate: Vector3 = Vector3.ZERO
+var _hb: Vector3 = Vector3.ZERO
+var _hb_rate: Vector3 = Vector3.ZERO
+var _fv: Vector3 = Vector3.ZERO
+var _fv_rate: Vector3 = Vector3.ZERO
 
 
 func _ready() -> void:
@@ -86,11 +107,19 @@ func _ready() -> void:
 func snap_to_target() -> void:
 	if target == null:
 		return
+	var n := narrowness()
 	_ahead = Vector3.ZERO
-	_bias = _heading_bias(narrowness())
-	_speed_s = _target_vel().length()
-	focus = _target_pos() + _bias
-	_apply_size(narrowness())
+	_fixed_focus = _target_pos()
+	_sv = _target_vel()
+	_sv_rate = Vector3.ZERO
+	_hb = _heading_bias(n)
+	_hb_rate = Vector3.ZERO
+	_fv = _sv
+	_fv_rate = Vector3.ZERO
+	_gp = _target_pos()
+	_gv = _sv
+	focus = _fixed_focus.lerp(_glide_goal(n), _glide_mix(n))
+	_apply_size(n)
 	_place()
 
 
@@ -99,13 +128,47 @@ func _process(delta: float) -> void:
 		return
 	var vel := _target_vel()
 	var n := narrowness()
-	var want := (vel * (look_ahead_time + n * AUTO_EXTRA_TIME)).limit_length(max_look_ahead + n * AUTO_EXTRA_MAX)
+	# The fixed framing (exactly as it always was).
+	var want := (vel * look_ahead_time).limit_length(max_look_ahead)
 	_ahead = _ahead.lerp(want, 1.0 - exp(-look_ahead_rate * delta))
-	_bias = _bias.lerp(_heading_bias(n), 1.0 - exp(-AUTO_HEADING_RATE * delta))
-	_speed_s = lerpf(_speed_s, vel.length(), 1.0 - exp(-AUTO_SPEED_RATE * delta))
-	focus = focus.lerp(_target_pos() + _ahead + _bias, 1.0 - exp(-follow_rate * delta))
+	_fixed_focus = _fixed_focus.lerp(_target_pos() + _ahead, 1.0 - exp(-follow_rate * delta))
+	# AUTO's glide (state kept up to date always, so switching is seamless).
+	_damp(delta, glide_velocity_w, vel, "_sv", "_sv_rate")
+	_damp(delta, glide_heading_w, _heading_bias(n), "_hb", "_hb_rate")
+	_damp(delta, glide_feed_w, vel, "_fv", "_fv_rate")
+	# Follow spring on the car's position; the lag a critically damped spring
+	# builds at a steady velocity (2 v / w) is fed forward from the smoothed velocity.
+	var goal := _target_pos() + _fv * (2.0 / glide_follow_w)
+	var w := glide_follow_w
+	_gv += (w * w * (goal - _gp) - 2.0 * w * _gv) * delta
+	_gp += _gv * delta
+	focus = _fixed_focus.lerp(_glide_goal(n), _glide_mix(n))
 	_apply_size(n)
 	_place()
+
+
+## AUTO's look point: the followed car position plus the smoothed look-ahead
+## and the heading bias.
+func _glide_goal(n: float) -> Vector3:
+	var ahead := (_sv * glide_ahead_time * n).limit_length(glide_ahead_max * n)
+	return _gp + ahead + _hb
+
+
+## How much of the glide is used: none at n = 0 (wide windows, fixed steps),
+## all of it from n = 0.5 on.
+func _glide_mix(n: float) -> float:
+	return clampf(n * 2.0, 0.0, 1.0)
+
+
+## One step of a critically damped second-order filter on the member `x` (with
+## its rate `r`) toward `goal`: continuous, no overshoot.
+func _damp(delta: float, w: float, goal: Vector3, x: StringName, r: StringName) -> void:
+	var xv: Vector3 = get(x)
+	var rv: Vector3 = get(r)
+	rv += (w * w * (goal - xv) - 2.0 * w * rv) * delta
+	xv += rv * delta
+	set(x, xv)
+	set(r, rv)
 
 
 ## How much AUTO adds for this window's shape (0 with a fixed zoom step).
@@ -122,9 +185,7 @@ func _apply_size(n: float) -> void:
 	if zoom_choice != 0:
 		zoom_factor = ZOOM_STEPS[clampi(zoom_choice - 1, 0, ZOOM_STEPS.size() - 1)]
 	else:
-		# No speed part while snapping to the grid: snapping needs a steady cell size.
-		var sp := 0.0 if snap_to_grid else clampf(_speed_s / AUTO_SPEED_REF, 0.0, 1.0)
-		zoom_factor = minf(1.0 + n * (AUTO_ASPECT_ZOOM + AUTO_SPEED_ZOOM * sp), AUTO_ZOOM_MAX)
+		zoom_factor = minf(1.0 + n * AUTO_ASPECT_ZOOM, AUTO_ZOOM_MAX)
 	size = ZOOM_LEVELS[zoom_index] * zoom_factor
 
 
@@ -141,7 +202,7 @@ func _heading_bias(n: float) -> Vector3:
 		return Vector3.ZERO
 	var f := -target.get_global_transform_interpolated().basis.z
 	f.y = 0.0
-	return f.normalized() * AUTO_HEADING_BIAS * n if f.length() > 0.01 else Vector3.ZERO
+	return f.normalized() * glide_heading_bias * n if f.length() > 0.01 else Vector3.ZERO
 
 
 func _target_pos() -> Vector3:

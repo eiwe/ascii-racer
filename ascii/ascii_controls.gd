@@ -14,6 +14,8 @@ class_name AsciiControls
 extends Node
 
 signal zoom_requested(step: int)
+## The player changed the glyph size with - or = (the new size in px).
+signal glyph_size_changed(px: int)
 ## Keys 1-7: index 0..6.
 signal mode_requested(index: int)
 
@@ -39,17 +41,26 @@ var mode_text: String = ""
 
 ## False hides the legend (the scene's own reasons: a title sequence, a menu).
 var legend_allowed: bool = true
+## More shortcuts for the legend, after the debug one (e.g. "Q  camera"); "" = none.
+var legend_extra: String = ""
 
 var hud: CanvasLayer
 var legend: Control
 var _label: Label
 var _panel: PanelContainer
 var _legend_layer: CanvasLayer
+var _legend_label: Label
+var _legend_style: StyleBoxFlat
 
 
 ## UI scale for high-density displays: 2.0 on a Retina Mac, where one logical
-## pixel is two physical ones and fixed pixel sizes look half as big; 1.0 elsewhere.
+## pixel is two physical ones and fixed pixel sizes look half as big; 1.0 on
+## other desktops. In a browser the page is drawn in device pixels, so it is the
+## device pixel ratio (1.25, 1.5, 2 ...), which can change at runtime (browser
+## zoom, another monitor).
 static func display_scale() -> float:
+	if OS.has_feature("web"):
+		return maxf(DisplayServer.screen_get_scale(), 1.0)
 	if OS.get_name() != "macOS":
 		return 1.0
 	var s := DisplayServer.screen_get_scale()
@@ -68,18 +79,15 @@ func _ready() -> void:
 	var plate := PanelContainer.new()
 	var plate_style := StyleBoxFlat.new()
 	plate_style.bg_color = LEGEND_BG
-	plate_style.set_content_margin_all(3.0 * display_scale())
-	plate_style.content_margin_left = 6.0 * display_scale()
-	plate_style.content_margin_right = 6.0 * display_scale()
 	plate.add_theme_stylebox_override("panel", plate_style)
-	plate.position = Vector2(8.0, 8.0) * display_scale()
+	_legend_style = plate_style
 	plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var text := Label.new()
 	text.text = LEGEND_TEXT
 	text.add_theme_font_override("font", HUD_FONT)
-	text.add_theme_font_size_override("font_size", roundi(13.0 * display_scale()))
 	text.add_theme_color_override("font_color", LEGEND_COLOR)
 	plate.add_child(text)
+	_legend_label = text
 	_legend_layer.add_child(plate)
 	legend = plate
 	var panel := PanelContainer.new()
@@ -95,9 +103,21 @@ func _ready() -> void:
 	hud.add_child(panel)
 	_label = Label.new()
 	_label.add_theme_font_override("font", HUD_FONT)
-	_label.add_theme_font_size_override("font_size", roundi(13.0 * display_scale()))
 	_label.add_theme_color_override("font_color", Color(0.85, 0.85, 0.85))
 	panel.add_child(_label)
+	apply_scale()
+
+
+## Sizes the HUD and legend text for display_scale() (again when it changes).
+func apply_scale() -> void:
+	var k := display_scale()
+	_legend_style.set_content_margin_all(3.0 * k)
+	_legend_style.content_margin_left = 6.0 * k
+	_legend_style.content_margin_right = 6.0 * k
+	legend.position = Vector2(8.0, 8.0) * k
+	_legend_label.add_theme_font_size_override("font_size", roundi(13.0 * k))
+	_label.add_theme_font_size_override("font_size", roundi(13.0 * k))
+	legend.reset_size()
 
 
 ## The open panel's rectangle in window pixels (empty while hidden).
@@ -107,6 +127,10 @@ func panel_rect() -> Rect2:
 
 func _process(_delta: float) -> void:
 	legend.visible = not hud.visible and legend_allowed
+	var lt := LEGEND_TEXT if legend_extra == "" else LEGEND_TEXT + "    " + legend_extra
+	if _legend_label.text != lt:
+		_legend_label.text = lt
+		legend.reset_size() # shrink the plate again when the text gets shorter
 	if not hud.visible or renderer == null:
 		return
 	var s := renderer.settings
@@ -141,8 +165,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			set_squeeze(s.squeeze_x, s.squeeze_y + SQUEEZE_STEP)
 		KEY_MINUS:
 			s.glyph_px -= 1
+			glyph_size_changed.emit(s.glyph_px)
 		KEY_EQUAL:
 			s.glyph_px += 1
+			glyph_size_changed.emit(s.glyph_px)
 		KEY_COMMA:
 			zoom_requested.emit(-1)
 		KEY_PERIOD:

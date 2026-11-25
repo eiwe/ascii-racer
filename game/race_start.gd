@@ -12,6 +12,13 @@
 ## Drawn in the renderer's overlay cell layer, top centre. Pauses with the game
 ## (it carries on where it was); cancel() stops it at once (back to the reel).
 ## Started by Game.reset_to_grid() for every start from the grid.
+##
+## Camera tip: on the first start of a game (entering play from the reel, or
+## --play; not Restart or the opponent being switched on) the cars wait on the
+## grid for TIP_TIME with a small note under the gantry naming the control that
+## switches between the isometric and chase cameras; it fades and the lights
+## begin. Using that control dismisses it at once (the lights then begin). From
+## then on the same hint sits in the corner legend (see tip_showing()).
 class_name RaceStart
 extends Node
 
@@ -29,6 +36,13 @@ const CLEAR_TIME: float = 0.8
 const REACTION: Vector2 = Vector2(0.45, 0.15)
 const REACTION_SPREAD: float = 0.05
 
+## The camera tip: how long it shows before the first light, and its fade.
+const TIP_TIME: float = 5.0
+const TIP_FADE: float = 0.5
+const TIP_INK: Color = Color("e6e8f2")
+const TIP_KEY_INK: Color = Color("ffcf5c")
+const TIP_BG: Color = Color(0.02, 0.025, 0.05)
+
 const HOUSING: Color = Color(0.03, 0.03, 0.035)
 const FRAME_INK: Color = Color("6b6f80")
 const OFF_INK: Color = Color("2c2e38")
@@ -44,6 +58,13 @@ var hold: float = 1.0
 ## Read-outs for tests: when the lights went out (t) and how many starts.
 var starts: int = 0
 var opponent_delay: float = 0.0
+## Set before the start that should show the camera tip (Game does this when
+## play begins); the next start() takes it.
+var tip_pending: bool = false
+## Seconds of camera tip left (-1 = none showing).
+var tip_left: float = -1.0
+## Where the gantry was last drawn, in overlay cells (for layout checks).
+var gantry_rect: Rect2 = Rect2()
 
 var _lit: int = 0
 var _after: float = -1.0 ## seconds since lights out while the gantry clears (-1 = not drawn)
@@ -78,7 +99,23 @@ func start() -> void:
 	_opp_wait = -1.0
 	hold = _rng.randf_range(HOLD.x, HOLD.y)
 	starts += 1
+	if tip_pending:
+		tip_pending = false
+		tip_left = TIP_TIME
+	# (A tip already showing carries on: entering play re-grids once more when
+	# the opponent is added.)
 	_hold_cars(true)
+
+
+## True while the camera tip is due or showing (the corner legend leaves the
+## camera hint out until it has faded, so the hint visibly moves there).
+func tip_showing() -> bool:
+	return tip_pending or tip_left > 0.0
+
+
+## The camera control was used: the tip has done its job.
+func dismiss_tip() -> void:
+	tip_left = -1.0
 
 
 ## Stops at once with nothing held (returning to the reel, quitting).
@@ -88,6 +125,8 @@ func cancel() -> void:
 	counting = false
 	_after = -1.0
 	_opp_wait = -1.0
+	tip_left = -1.0
+	tip_pending = false
 	_beep.stop()
 	_go.stop()
 
@@ -123,7 +162,11 @@ func _physics_process(delta: float) -> void:
 
 
 func _process(delta: float) -> void:
-	if counting:
+	if counting and tip_left > 0.0:
+		tip_left = maxf(tip_left - delta, 0.0)
+		if tip_left <= 0.0:
+			tip_left = -1.0
+	elif counting:
 		t += delta
 		var want := clampi(floori((t - FIRST_LAMP) / LAMP_INTERVAL) + 1, 0, LAMPS)
 		while _lit < want:
@@ -195,6 +238,7 @@ func _draw() -> void:
 			y0 = ceili(hud.end.y) + 1
 	if _after >= 0.0:
 		y0 -= roundi(_after / CLEAR_TIME * (h + 3)) # slides up and away
+	gantry_rect = Rect2(x0, y0, w + 1.0, h)
 	for y in range(y0, y0 + h):
 		for x in range(int(x0), int(x0 + w) + 1):
 			ov.cover(x, y, 0.94, HOUSING)
@@ -219,3 +263,45 @@ func _draw() -> void:
 					ov.put_char(x, y, g, LIT_CORE.lerp(LIT_EDGE, clampf(d * 1.1, 0.0, 1.0)))
 				else:
 					ov.put_char(x, y, "o" if d < 0.8 else ".", OFF_INK)
+	if tip_left > 0.0:
+		_draw_tip(ov, roundi(x0 + w * 0.5), y0 + h + 1)
+
+
+## The camera tip, centred at column `cx`, from row `y`: a dark box with the
+## control (keyboard, and the pad button when a pad is connected) and what it does.
+func _draw_tip(ov: AsciiOverlay, cx: int, y: int) -> void:
+	var keys := camera_keys()
+	var rest := "  switch camera: isometric / chase"
+	var text_w := keys.length() + rest.length()
+	var x := cx - text_w / 2
+	var fade := clampf(tip_left / TIP_FADE, 0.0, 1.0)
+	for yy in range(y, y + 3):
+		for xx in range(x - 2, x + text_w + 2):
+			ov.cover(xx, yy, 0.9 * fade, TIP_BG)
+	ov.text(x, y + 1, keys, TIP_KEY_INK.lerp(TIP_BG, 1.0 - fade))
+	ov.text(x + keys.length(), y + 1, rest, TIP_INK.lerp(TIP_BG, 1.0 - fade))
+
+
+## The camera control as shown in the tip: the key, and the pad button when a
+## gamepad is connected (from the input map, so a rebinding shows up here).
+static func camera_keys() -> String:
+	var key := ""
+	var pad := ""
+	for ev in InputMap.action_get_events(&"camera_toggle"):
+		if ev is InputEventKey and key == "":
+			var k := ev as InputEventKey
+			key = OS.get_keycode_string(k.physical_keycode if k.physical_keycode != 0 else k.keycode)
+		elif ev is InputEventJoypadButton and pad == "":
+			pad = PAD_NAMES.get((ev as InputEventJoypadButton).button_index, "button %d" % (ev as InputEventJoypadButton).button_index)
+	if pad != "" and (assume_pad or not Input.get_connected_joypads().is_empty()):
+		return "%s / pad %s" % [key, pad] if key != "" else "pad " + pad
+	return key
+
+
+## Test hook: show the pad variant as if a gamepad were connected.
+static var assume_pad: bool = false
+
+const PAD_NAMES: Dictionary = {
+	JOY_BUTTON_A: "A", JOY_BUTTON_B: "B", JOY_BUTTON_X: "X", JOY_BUTTON_Y: "Y",
+	JOY_BUTTON_LEFT_SHOULDER: "LB", JOY_BUTTON_RIGHT_SHOULDER: "RB", JOY_BUTTON_BACK: "Back", JOY_BUTTON_START: "Start",
+}

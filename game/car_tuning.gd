@@ -235,6 +235,7 @@ func save_custom() -> String:
 	if err != OK:
 		push_error("could not save tuning to %s (%s)" % [save_path, error_string(err)])
 		return ""
+	WebStore.saved(save_path) # web: also kept in the browser's localStorage
 	presets[CUSTOM] = values
 	if not names.has(CUSTOM):
 		names.append(CUSTOM)
@@ -247,6 +248,7 @@ func save_custom() -> String:
 ## Loads `custom` from the save file if there is one. Unknown keys are ignored;
 ## missing ones keep the balanced value.
 func load_custom() -> bool:
+	WebStore.restore(save_path) # web: the browser's copy, if any
 	if not FileAccess.file_exists(save_path):
 		return false
 	var cfg := ConfigFile.new()

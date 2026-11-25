@@ -4,6 +4,8 @@ A 3D toy-car racing game where every pixel on screen is a text character. The wo
 
 It is a prototype, in the spirit of 90s top-down racers, built with [Godot 4.7](https://godotengine.org/).
 
+**[Play in the browser](https://eiwe.github.io/ascii-racer/)** (experimental web build; desktop Chrome or Firefox), or download it for Windows, Linux or macOS below.
+
 ![The opening demo reel: the ASCII Racer logo decodes in over the car driving the circuit](docs/images/hero.gif)
 
 ![The ASCII Racer logo, built from characters](docs/images/logo.png)
@@ -24,7 +26,7 @@ It is a prototype, in the spirit of 90s top-down racers, built with [Godot 4.7](
 - **Two cameras**: fixed isometric (default) and a rear chase view with right-stick look-around.
 - **Seven lighting modes** on keys `1`–`7`: a sunset sky with clouds (the default), night with headlights, the classic look, a low golden-hour sun with long shadows, hatched shadows, a glint on the car, and a moving sun.
 - **Night racing** (lighting `2`, experimental): moonlight with the track edges still readable, headlight beams that light the road ahead and throw moving shadows, red tail lamps that brighten under braking, on both cars and in the demo reel, under a sky with a moon and stars.
-- **Isometric zoom that fits the window**: in the default AUTO zoom, a 16:9 or narrower window looks further ahead and zooms out a little, so it shows at least as much road ahead as an ultrawide. Fixed zoom steps are in the pause menu.
+- **Isometric zoom that fits the window**: in the default AUTO zoom, a 16:9 or narrower window looks further ahead and zooms out a little, so it shows at least as much road ahead as an ultrawide, with calm, heavily smoothed camera motion. Fixed zoom steps (car centred) are in the pause menu.
 - **F1-style start lights**: every start from the grid (from the reel, a restart, or turning the opponent on) runs five red lights with a beep each, a random hold, then lights out with a higher beep. The cars are held until then (the throttle still revs the engine), the race music and the lap timer start at lights out, and the opponent reacts after about 0.45 s at level 1 down to about 0.15 s at level 5.
 - **An AI opponent**: a red speedster that starts beside you on the grid and laps freely, at a difficulty from 1 to 5 (or off) set in the pause menu. It drives the same car with the same `balanced` setup as you, with no catch-up: higher levels simply drive closer to the limit, and levels 4 and 5 drift the hairpin and use nitro. Contact is solid, and your position and the gap in seconds show at the bottom left.
 - **Sound and music**: a recorded petrol engine with a simulated gearbox, tyre squeal, landings, impacts and nitro, plus menu and race music. A pause menu on `Esc` has volume controls that are saved between runs.
@@ -33,14 +35,14 @@ It is a prototype, in the spirit of 90s top-down racers, built with [Godot 4.7](
 
 ## Download and play
 
-Grab a build from the [latest release](../../releases/latest).
+Grab a build from the [latest release](../../releases/latest), or **[play in the browser](https://eiwe.github.io/ascii-racer/)**.
 
 | Platform | File | Notes |
 |---|---|---|
 | Windows (x86-64) | `ascii-racer-<version>-windows-x86_64.zip` | Unzip and run `ascii-racer.exe`. Unsigned, so SmartScreen shows "More info → Run anyway" the first time. |
 | Linux (x86-64) | `ascii-racer-<version>-linux-x86_64.tar.gz` | Extract and run `./ascii-racer.x86_64`. |
 | macOS (Intel and Apple Silicon) | `ascii-racer-<version>-macos-universal.zip` | Unzip and open `ASCII Racer.app`. Not notarised: see [First launch on macOS](#first-launch-on-macos). |
-| Web browser (experimental) | `ascii-racer-<version>-web.zip` | Unzip and serve the folder from a web server (opening `index.html` from disk does not work); see [Web build](#web-build). |
+| Web browser (experimental) | [eiwe.github.io/ascii-racer](https://eiwe.github.io/ascii-racer/), or `ascii-racer-<version>-web.zip` | Play it online, or unzip and serve the folder from a web server (opening `index.html` from disk does not work); see [Web build](#web-build). |
 
 The desktop builds need a GPU with Vulkan (Windows, Linux), Direct3D 12 (Windows) or Metal (macOS). The web build needs a desktop browser with WebGL 2 (current Chrome or Firefox).
 
@@ -55,9 +57,15 @@ tools/serve_web.sh            # serves build/web/ at http://127.0.0.1:8060/
 It runs from any static web host without special headers (it is the single-threaded build). The download is about 22 MB zipped; the browser loads a 40 MB WebAssembly engine (10 MB if the server compresses it) and a 12 MB game data file. Known differences from the desktop builds:
 
 - **The picture is close but not identical.** The Compatibility renderer lights scenes differently (it adds shadowed lights in sRGB space, uses simpler diffuse shading and its own light falloff), so the lighting modes are rebalanced for it. Classic and the isometric views match closely; night and the chase view's far distance differ most. The normal and depth information the character shapes come from is drawn a different way, with the same result.
-- **Sound starts after the first key press or click** (browsers block audio until the page is used), so the reel opens silent.
+- **Sound, keyboard and gamepad work** in Chrome and in a Firefox-based browser (tested by the owner). Gamepad rumble in the browser has not been checked.
+- **A start screen first.** Browsers keep a page silent until it is clicked or a key is pressed, so the web build opens on the logo with "click or press any key"; that click or key switches the sound on and starts the demo reel and its music from the top (it does not start a race). A gamepad button cannot switch sound on in a browser, so the screen asks for a click or key. If the browser already allows sound, the screen is skipped.
+- **High-density displays**: characters are sized for the display's pixel density (16 px on a 2x display such as a Retina Mac, the normal 9 px on a 1x display, in between for 1.25x and 1.5x), and so is the HUD text; this follows browser zoom and moves between monitors.
+- **Settings are kept in the browser**: the volumes, mute, opponent level, zoom, glyph size and the saved `custom` handling are stored by the game in the browser's site storage (IndexedDB) and, as a backup that is written the moment you save, in its localStorage. Clearing the site's data resets them.
+- **Night looks a little different** (the headlight pool and the kerbs inside it); it is fully playable.
 - **No Quit** in the menu (close the tab), no command-line options, and settings and custom tuning are kept in the browser's storage for the site.
-- **Esc** opens the menu and also leaves the browser's fullscreen. Gamepads work through the browser's gamepad support where it has it; rumble may not.
+- **Esc** opens the menu and also leaves the browser's fullscreen.
+
+The hosted copy at [eiwe.github.io/ascii-racer](https://eiwe.github.io/ascii-racer/) is the `gh-pages` branch: `tools/deploy_pages.sh` replaces it with the current `build/web/` as a single fresh commit (so the large engine file does not pile up in history), and `tools/release.sh --publish` runs it after creating a release.
 
 ### First launch on macOS
 
@@ -80,7 +88,7 @@ On macOS 14 and earlier you can also right-click the app and choose Open. That s
 
 ## Controls
 
-The game opens on the demo reel. Press any key, button or trigger to start driving. `Esc` (or Start on a gamepad) opens the menu: resume, restart, the opponent's difficulty (off or 1 to 5, applied when the menu closes), the isometric zoom (AUTO, or a fixed 0.85 to 1.50 times the base framing), volume sliders for master, music and effects, a sound check that plays each sound on its own, return to the title, and quit. The difficulty, zoom and volumes are saved between runs. Opening the menu during the start lights pauses them; they carry on where they were when it closes (Restart begins them again). The reset key does nothing under the lights.
+The game opens on the demo reel. Press any key, button or trigger to start driving. Before the first start lights a note under the start gantry shows, for five seconds, the key (and the pad button, with a gamepad connected) that switches between the isometric and chase cameras; it then fades and the same shortcut stays in the small legend in the top left corner, next to the debug menu's. `Esc` (or Start on a gamepad) opens the menu: resume, restart, the opponent's difficulty (off or 1 to 5, applied when the menu closes), the isometric zoom (AUTO, or a fixed 0.85 to 1.50 times the base framing), volume sliders for master, music and effects, a sound check that plays each sound on its own, return to the title, and quit. The difficulty, zoom, volumes and mute, the glyph size you set with `-` / `=`, and a saved `custom` handling preset are kept between runs; the glyph size is kept at the same physical size if you move to a display of a different density, and stepping back to the default size forgets it. Not kept between runs: the lighting mode and sun position, the camera (isometric or chase) and the chase distance, the base isometric zoom (`,` `.`), squeeze, colour mode, background tint, grid snap, rumble, the debug HUD, and the selected handling preset (only `custom` is saved, with F5). Opening the menu during the start lights pauses them; they carry on where they were when it closes (Restart begins them again). The reset key does nothing under the lights.
 
 ### Driving
 
@@ -111,7 +119,7 @@ To drift, press the handbrake while steering at speed. Hold it, or tap it and ke
 | Reset it to the preset | Backspace | X |
 | Save as `custom` | F5 | Right-stick click |
 
-The debug HUD (speed, lap times, telemetry, render settings and every key) starts minimised: a small `H  debug menu` note in the top left corner shows how to open it. It is hidden in the demo reel and the menu.
+The debug HUD (speed, lap times, telemetry, render settings and every key) starts minimised: a small legend in the top left corner, `H  debug menu    Q  camera`, shows how to open it and how to switch cameras. It is hidden in the demo reel and the menu.
 
 While the tuning panel is open the arrow keys navigate it, so drive with WASD.
 
@@ -126,7 +134,7 @@ While the tuning panel is open the arrow keys navigate it, so drive with WASD.
 | `I` / `K` | Raise / lower the sun (the moon at night; not in classic) |
 | `[` / `]` | Squeeze characters together / apart (both axes) |
 | `;` / `'` | Vertical squeeze only |
-| `-` / `=` | Glyph size |
+| `-` / `=` | Glyph size (remembered between runs) |
 | `,` / `.` | Zoom (isometric: the base that AUTO and the menu's steps multiply) or camera distance (chase) |
 | `C` | Full colour or mono ink |
 | `B` | Background tint behind glyphs |
@@ -242,7 +250,7 @@ The opponent has its own scenarios: `opp_laps` (each level alone over a run of l
 
 Scripted runs (the drive test, `--attracttest`, `--attractshots`, the hero recording) skip the start lights. The `countdown` scenario turns them on: the cars do not move before lights out while the throttle is blipped, nitro cannot be used, the hold differs between starts, the lap timer starts at lights out, the opponent's reaction at levels 1 and 5 and its first corner, pausing and cancelling mid-sequence, no nodes or sound players left behind, and screenshots (two, three and five lamps and just after lights out, in iso and chase, on the Retina grid and at night).
 
-Three more scenarios cover the night lighting, the zoom and the HUD: `night` (screenshots at night where visibility matters, iso and chase: the grid, flat out on the straight, braking for the hairpin, the R6 after the jump, under the bridge, the opponent ahead and behind; `--nightmode=<n>` shoots another mode at the same places), `view_ahead` (road visible ahead of the car along its heading at 16:9, 16:10 and 21:9, standing and flat out, with the fixed 1.00 zoom and with AUTO, the car's size on screen, and how smoothly AUTO's zoom moves over a lap) and `hud_shots` (window captures of the minimised HUD's legend and the open HUD over the start lights).
+Three more scenarios cover the night lighting, the zoom and the HUD: `night` (screenshots at night where visibility matters, iso and chase: the grid, flat out on the straight, braking for the hairpin, the R6 after the jump, under the bridge, the opponent ahead and behind; `--nightmode=<n>` shoots another mode at the same places), `view_ahead` (road visible ahead of the car along its heading at 16:9, 16:10 and 21:9, standing and flat out, with the fixed 1.00 zoom and with AUTO, the car's size on screen, and how smoothly AUTO's zoom moves over a lap) `hud_shots` (window captures of the minimised HUD's legend and the open HUD over the start lights), `camera_motion` (how calm the isometric camera is over a lap with the reel's driver and with the level-5 opponent, in a 16:9 output, AUTO and fixed: the camera's acceleration and jerk, the car's offset and speed on screen and its direction reversals, also through the hairpin and the esses; `--camtune=<name>=<value>,...` tries other camera settings), `camera_tip` (the camera note before the first lights: when it shows, that Restart and the opponent do not bring it back, dismissing it, screenshots) and `gate` (the finish gate's colliders against its legs, deliberate hits, and contacts over laps of the reel driver and the opponent at every level).
 
 **Audio**: nobody can listen in a scripted run, so the mix is checked by recording it. `--dtonly=audio` under Godot's movie writer saves the game's audio for scripted scenarios, and `tools/measure_audio.py` reports loudness per layer, clipping and the engine's pitch over time.
 
@@ -287,10 +295,10 @@ The web build runs on the Compatibility renderer (`rendering/renderer/rendering_
 - **The opponent is a rival on the road, not yet a race.** There is a start, but no lap count, finish or results, and no jump-start penalty (the car is simply held until lights out): both cars lap freely after the lights. Its engine is quieter and fades with distance but is not panned left or right, and only its engine is heard (no tyre or nitro sounds of its own).
 - **The Retina default is new in 0.2.** On a Retina Mac the game now starts with larger glyphs and HUD text. If the characters still look too small or too large, adjust them with `-` and `=`.
 - **The Windows build has only been run under Wine**, not on a Windows PC.
-- **The web build is experimental.** It looks close to the desktop builds but not the same (see [Web build](#web-build)), its sound has not been listened to in a browser yet, and gamepads and rumble in the browser are untested.
+- **The web build is experimental.** It looks close to the desktop builds but not the same (see [Web build](#web-build)); rumble in the browser is untested.
 - **Glyph flicker.** As the camera moves, glyphs change. Grid snapping (`G`) reduces this for the static world in the isometric view but does not remove it, and it does not apply to the chase view. In the sunset mode it helps less when the isometric view is zoomed out (AUTO in a 16:9 window, or the menu's steps above 1.00): the grid-snap measurement goes from about 1% of cells changing at the base zoom to about 3% under AUTO at 16:9. The other modes are not affected.
 - **Night is experimental.** It is tuned so the road edges stay readable beyond the headlights, but the far side of a corner outside the beam is sparse, and an opponent's beam from behind washes out the player's car in the chase view.
-- **AUTO zoom moves the car off centre.** At speed in a 16:9 window the car sits well behind the centre of the screen and is drawn up to about a fifth smaller than at the base zoom; a fixed step in the menu keeps it centred at a constant size.
+- **AUTO zoom moves the car off centre.** At speed in a 16:9 window the car sits behind the centre of the screen and is drawn about a tenth smaller than at the base zoom; a fixed step in the menu keeps it centred at a constant size.
 - **One track and one car model** for the player (the AI opponent drives a second, red car), with one opponent at a time.
 
 ## Credits and licences

@@ -4,8 +4,10 @@
 #
 #   tools/release.sh <version>                 build and package only
 #   tools/release.sh <version> --publish       ... then commit the version bump,
-#                                              tag v<version>, push, and create
-#                                              the GitHub release with the builds
+#                                              tag v<version>, push, create the
+#                                              GitHub release with the builds, and
+#                                              publish the web build to GitHub
+#                                              Pages (tools/deploy_pages.sh)
 #   options: --notes <file>   release notes (default: docs/releases/<version>.md
 #                             if it exists, otherwise GitHub's generated notes)
 #            --no-smoke       skip the Linux smoke test (needs a display)
@@ -145,3 +147,5 @@ git push -q origin "$TAG"
 if [ -n "$NOTES" ]; then NOTE_ARGS=(--notes-file "$NOTES"); else NOTE_ARGS=(--generate-notes); fi
 gh release create "$TAG" "$WIN" "$LIN" "$MAC" "$WEB" "$OUT/SHA256SUMS.txt" --title "ASCII Racer $VERSION" --verify-tag "${NOTE_ARGS[@]}"
 gh release view "$TAG" --json url --jq .url
+step "Web build to GitHub Pages"
+tools/deploy_pages.sh origin

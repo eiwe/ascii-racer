@@ -13,6 +13,8 @@ var camera: FollowCamera
 var chase: ChaseCamera
 var props: Node3D
 var lighting: Lighting
+## The finish gate over the start line (a static body).
+var gate: StaticBody3D
 
 
 
@@ -100,24 +102,50 @@ func add_cone(pos: Vector3) -> void:
 	props.add_child(body)
 
 
+## The kit finish gate: distance of a leg's inner foot from the gate's centre
+## (model units), and how high the legs' colliders go (world units; above it
+## the legs curve into the arch, out of a car's reach).
+const GATE_LEG_INNER: float = 0.457
+const GATE_LEG_SOLID_HEIGHT: float = 1.05
+
 ## Tree clearance from the centre line (road edge + kerb + this much).
 const TREE_CLEARANCE: float = 2.0
 const TREE_SEED: int = 7
 
 
 func _build_props() -> void:
-	# Finish gate over the start line, posts just outside the kerbs, solid.
+	# Finish gate over the start line. The kit gate's legs are 0.457 from its
+	# centre at their inner foot (they lean in as they rise into the arch);
+	# scaled so that foot stands just outside the asphalt, on the kerbs, so the
+	# whole road is open between them. Each leg is solid up to LEG_SOLID_HEIGHT:
+	# its collider is the convex hull of its own mesh there, so what you see is
+	# what you hit, and a car sliding along it meets smooth faces, not box corners.
 	var gate_pos := track.point_at(Track.START_S)
 	var t := track.tangent_at(Track.START_S)
-	var half := Track.ROAD_HALF_WIDTH + Track.KERB_WIDTH + 0.15
-	var post := BoxShape3D.new()
-	post.size = Vector3(0.14, 1.8, 0.3)
-	# The kit gate's posts are 0.715 from its centre at scale 1.
-	var gate := _static_prop("gate-finish", gate_pos, rad_to_deg(atan2(t.x, t.z)), Vector3(half / 0.715, 1.6, 1.6), null, Vector3.ZERO)
-	for side in [-1.0, 1.0]:
+	var half := Track.ROAD_HALF_WIDTH + 0.02
+	gate = _static_prop("gate-finish", gate_pos, rad_to_deg(atan2(t.x, t.z)), Vector3(half / GATE_LEG_INNER, 1.6, 1.6), null, Vector3.ZERO)
+	var inv := gate.global_transform.affine_inverse()
+	for side: float in [-1.0, 1.0]:
+		var pts := PackedVector3Array()
+		for mi: MeshInstance3D in gate.find_children("*", "MeshInstance3D", true, false):
+			var xf := inv * mi.global_transform
+			var faces := mi.mesh.get_faces()
+			for i in faces.size():
+				var q := xf * faces[i]
+				if q.x * side <= 0.5:
+					continue
+				if q.y <= GATE_LEG_SOLID_HEIGHT:
+					pts.append(q)
+				# Where the triangle's edges cross the cut height (so the hull
+				# reaches it even between widely spaced vertices).
+				var nxt := xf * faces[i - i % 3 + (i + 1) % 3]
+				if (q.y - GATE_LEG_SOLID_HEIGHT) * (nxt.y - GATE_LEG_SOLID_HEIGHT) < 0.0:
+					pts.append(q.lerp(nxt, (GATE_LEG_SOLID_HEIGHT - q.y) / (nxt.y - q.y)))
+		var hull := ConvexPolygonShape3D.new()
+		hull.points = pts
 		var cs := CollisionShape3D.new()
-		cs.shape = post
-		cs.position = Vector3(side * half, 0.9, 0.0) # local: gate's x runs across the road
+		cs.name = "Leg"
+		cs.shape = hull
 		gate.add_child(cs)
 	# The top beam too (high above the car; it is there so the chase camera's
 	# line of sight sees it).

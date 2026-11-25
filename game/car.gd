@@ -28,6 +28,15 @@ const DRIFT_BLEND_TIME: float = 0.06
 const DRIFT_EXIT_BLEND_DEG: float = 10.0
 const DRIFT_EXIT_DONE_DEG: float = 2.0
 const DRIFT_EXIT_MAX_TIME: float = 0.7
+## Player keys: the slowest turn-in rate the speed scaling may give (full lock
+## per second; 2.5 = 0.4 s), so a slow-steering preset stays drivable.
+const KEY_STEER_MIN_RATE: float = 2.5
+## Fraction of top speed below which player keys keep the full `steer_speed`
+## (parking and hairpins); the slowdown ramps in linearly from here to top speed.
+const KEY_STEER_SLOW_FROM: float = 0.3
+## Slip angle past which steering toward the slip side counts as catching a
+## slide and keeps the full key rate.
+const KEY_COUNTER_SLIP_DEG: float = 3.0
 ## Tank (seconds) needed to start a burn: holding the button on an empty tank
 ## does not stutter on the trickle.
 const NITRO_MIN_START: float = 0.15
@@ -87,6 +96,13 @@ const NITRO_MIN_START: float = 0.15
 @export_range(0.5, 30.0, 0.5) var steer_speed: float = 6.0
 ## Keys: how fast it returns to centre when the input eases off.
 @export_range(0.5, 30.0, 0.5) var steer_return_speed: float = 9.0
+## Player keys: the turn-in rate at top speed as a fraction of `steer_speed`,
+## ramped in linearly from `KEY_STEER_SLOW_FROM` of top speed (1 = the same at
+## every speed). Keys jump straight to full input, so a slower turn-in at speed
+## turns a tap into a small correction instead of a snap. Never below
+## `KEY_STEER_MIN_RATE`; the return to centre and counter-steering into a slide
+## stay at full rate, and scripted drivers always use `steer_speed`.
+@export_range(0.1, 1.0, 0.05) var key_steer_fast_ratio: float = 0.45
 ## Analogue stick: how fast the wheel follows the stick (full lock per second).
 ## Much faster than for keys; the thumb already does the smoothing.
 @export_range(1.0, 120.0, 1.0) var stick_steer_speed: float = 40.0
@@ -547,14 +563,22 @@ func _physics_process(delta: float) -> void:
 
 func _update_steering(delta: float) -> void:
 	var target := clampf(steer_input, -1.0, 1.0)
+	var t := clampf(absf(forward_speed) / top_speed, 0.0, 1.0)
 	var rate: float
 	if steer_analog:
 		target = signf(target) * pow(absf(target), stick_steer_exponent)
 		rate = stick_steer_speed
+	elif absf(target) > absf(_steer_state) and signf(target) == signf(_steer_state) or _steer_state == 0.0:
+		rate = steer_speed
+		# Player keys turn in more slowly at speed, unless they counter-steer
+		# into a slide (steering toward the slip side, as the lock opening does).
+		var counter := absf(slip_angle) > deg_to_rad(KEY_COUNTER_SLIP_DEG) and signf(target) == signf(slip_angle)
+		if player_input and not counter and forward_speed > 0.0:
+			var k := clampf((t - KEY_STEER_SLOW_FROM) / (1.0 - KEY_STEER_SLOW_FROM), 0.0, 1.0)
+			rate = maxf(steer_speed * lerpf(1.0, key_steer_fast_ratio, k), minf(steer_speed, KEY_STEER_MIN_RATE))
 	else:
-		rate = steer_speed if absf(target) > absf(_steer_state) and signf(target) == signf(_steer_state) or _steer_state == 0.0 else steer_return_speed
+		rate = steer_return_speed
 	_steer_state = move_toward(_steer_state, target, rate * delta)
-	var t := clampf(absf(forward_speed) / top_speed, 0.0, 1.0)
 	var lock := deg_to_rad(lerpf(max_steer_low_deg, max_steer_high_deg, t))
 	if countersteer_open_deg > 0.0 and forward_speed > 1.0 and _steer_state != 0.0 and signf(_steer_state) == signf(slip_angle):
 		lock = lerpf(lock, deg_to_rad(max_steer_low_deg), clampf(absf(slip_angle) / deg_to_rad(countersteer_open_deg), 0.0, 1.0))

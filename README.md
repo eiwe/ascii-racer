@@ -139,6 +139,8 @@ The debug HUD (speed, lap times, telemetry, render settings and every key) start
 
 While the tuning panel is open the arrow keys navigate it, so drive with WASD.
 
+Steering keys turn the wheels in gradually, and more slowly at speed: from a third of top speed up, the turn-in rate falls to `key rate fast` (0.45) of `key steer rate` at top speed, so full lock takes about 0.17 s when slow and 0.36 s flat out (never longer than 0.4 s). A tap at speed is a small correction rather than a snap to full lock. Letting go, reversing through centre and counter-steering into a slide stay at the full rate. The stick and the scripted drivers (opponent, demo reel, autopilot) are not slowed.
+
 ![The tuning panel and telemetry](docs/images/tuning-panel.png)
 
 ### Rendering
@@ -275,6 +277,8 @@ There are no unit tests. Scripted modes stand in for them, and all of them need 
 godot --path . --fixed-fps 120 -- --drivetest=/tmp/drive
 godot --path . --fixed-fps 120 -- --drivetest=/tmp/drive --preset=heavy --dtonly=spawn,jump,lap
 ```
+
+`--dtonly=key_steer` measures keyboard steering through real key events at top speed, half speed and 3.5 u/s: time to full lock, 60 and 120 ms taps, a timed and a feedback lane change, a held corner, and a slide caught with the keys on asphalt, dirt and snow.
 
 It writes `results.txt` and PNGs to the given folder and quits. Unless a scenario changes it, it drives Figure Eight. It covers top speed, braking, each corner's clean speed, behaviour past the limit, the drift, the nitro, the jump, the bridge, kerbs, collisions, reset, pausing, gamepad bindings, the lighting modes, autopilot laps and the demo reel's driver (`--dtonly=demo_laps`).
 

@@ -107,6 +107,7 @@ const OVERRIDES: Dictionary = {
 const PANEL: Array = [
 	["Steering", "max_steer_high_deg", "lock fast (deg)", 0.5],
 	["Steering", "steer_speed", "key steer rate", 0.5],
+	["Steering", "key_steer_fast_ratio", "key rate fast", 0.05],
 	["Steering", "counter_steer_assist", "c-steer assist", 0.05],
 	["Tyres", "grip_road", "road grip", 0.05],
 	["Tyres", "front_grip", "front grip", 0.05],

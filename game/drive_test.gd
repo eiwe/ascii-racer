@@ -169,7 +169,7 @@ func _run() -> void:
 		if arg.begins_with("--dtonly="):
 			only = arg.trim_prefix("--dtonly=")
 	for t: String in ["spawn", "accel_brake", "corners", "limit", "nitro", "nitro_shots", "turns", "handbrake", "drift", "feel", "offroad", "kerbs", "tree", "cones", "jump", "bridge", "reset_bridge", "keys",
-			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting", "level_select", "tracks", "camera_blend", "time_of_day", "dirt_feel", "dust_tour", "abuse", "opp_trace", "bank_iso"]:
+			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting", "level_select", "tracks", "camera_blend", "time_of_day", "dirt_feel", "dust_tour", "abuse", "opp_trace", "bank_iso", "key_steer"]:
 		if only == "" or t in only.split(","):
 			await call("_test_" + t)
 	log_line("\n[summary] preset %s" % game.tuning.current)
@@ -5038,6 +5038,7 @@ func _test_opp_trace() -> void:
 			t, sp, lat, drv._line_lateral(sp), oc.forward_speed, drv._speed_at(sp), rad_to_deg(oc.slip_angle), rad_to_deg(oc.angular_velocity.y),
 			oc.wheels_grounded, oc.steer_input, oc.throttle_input, oc.brake_input, oc.handbrake_input, oc.drift_state, oc.nitro_level, drv.resets])
 	_opp_off()
+	car.freeze = false # _park_player froze it; later scenarios drive it
 
 
 
@@ -5180,3 +5181,173 @@ func _abuse_cases(cases: Array) -> void:
 			"upright" if car.is_upright() else "ON ITS SIDE/ROOF", note if ok else "  << BAD"])
 	log_line("  %d of %d runs bad" % [bad, cases.size()])
 	_m["abuse " + tr.def.id] = "%d of %d runs bad" % [bad, cases.size()]
+
+
+
+## Key steering, through real key events (the player's path), on the open
+## ground at top speed, half speed and 3.5 u/s (asphalt): time to full lock;
+## 60 ms and 120 ms taps (peak steer, peak yaw rate, sideways movement after
+## 1 s, peak slip); a lane change (left, then right); a held corner (time to 90%
+## of the steady yaw rate); and a slide caught by keys on asphalt, dirt and snow.
+func _test_key_steer() -> void:
+	log_line("\n[key steer] keys through the input path (preset %s)" % game.tuning.current)
+	var gb: StaticBody3D = (game.track as Track).ground_body
+	var pad: Vector3 = (game.track as Track).bounds.end + Vector3(30.0, 0.0, 30.0)
+	pad.y = 0.0
+	var east := Vector3(1.0, 0.0, 0.0)
+	gb.set_meta(&"surface", &"road")
+	car.player_input = true
+	car.freeze = false # the opponent scenarios before it leave the car parked
+	for vs: Array in [["top", car.top_speed], ["half", car.top_speed * 0.5], ["slow", 3.5]]:
+		var v: float = vs[1]
+		var out := PackedStringArray()
+		# Full lock.
+		await _ks_place(pad, east, v)
+		var t0 := Time.get_ticks_usec()
+		var n := 0
+		_key(KEY_D, true)
+		while car._steer_state < 0.999 and n < 240:
+			await _ks_step(v)
+			n += 1
+		_key(KEY_D, false)
+		out.append("full lock %.3f s" % (n / 120.0))
+		# Taps.
+		for tap_ms: int in [60, 120]:
+			await _ks_place(pad, east, v)
+			var r: Dictionary = await _ks_tap(tap_ms, v, east)
+			out.append("%d ms tap: peak steer %.2f, yaw %.0f deg/s, sideways %.2f u after 1 s, slip %.1f deg" % [tap_ms, r.steer, r.yaw, r.side, r.slip])
+		# Lane change: right 250 ms, then left 250 ms, then straight; heading
+		# error after (overshoot) and peak slip.
+		await _ks_place(pad, east, v)
+		var p0 := car.global_position
+		var slip_max := 0.0
+		var heads: Array[float] = []
+		for f in 360:
+			_key(KEY_D, f < 30)
+			_key(KEY_A, f >= 30 and f < 60)
+			await _ks_step(v)
+			slip_max = maxf(slip_max, absf(rad_to_deg(car.slip_angle)))
+			var fw := -car.global_basis.z
+			heads.append(rad_to_deg(atan2(fw.z, fw.x)))
+		_key(KEY_A, false)
+		_key(KEY_D, false)
+		# Peak heading during the lane change, then the largest swing past
+		# straight the other way once the second key is released.
+		var h_peak := 0.0
+		for h in heads.slice(0, 60):
+			if absf(h) > absf(h_peak):
+				h_peak = h
+		var over := 0.0
+		for h in heads.slice(60):
+			if signf(h) == -signf(h_peak):
+				over = maxf(over, absf(h))
+		out.append("lane change: sideways %.2f u, peak heading %.1f deg, overshoot %.1f deg, peak slip %.1f deg" % [absf((car.global_position - p0).dot(Vector3(0.0, 0.0, 1.0))), absf(h_peak), over, slip_max])
+		# Lane change driven by feedback, as a player would: right until 1 u
+		# across, left until straight again, then let go. Swing past straight
+		# afterwards, final offset and peak slip.
+		await _ks_place(pad, east, v)
+		p0 = car.global_position
+		slip_max = 0.0
+		var phase := 0
+		var over2 := 0.0
+		var t_done := 0
+		for f in 480:
+			var fw := -car.global_basis.z
+			var hd := rad_to_deg(atan2(fw.z, fw.x))
+			var lat := (car.global_position - p0).dot(Vector3(0.0, 0.0, 1.0))
+			if phase == 0 and lat > 1.0:
+				phase = 1
+			elif phase == 1 and hd <= 0.0:
+				phase = 2
+				t_done = f
+			if phase == 2:
+				over2 = maxf(over2, -hd)
+			_key(KEY_D, phase == 0)
+			_key(KEY_A, phase == 1)
+			await _ks_step(v)
+			slip_max = maxf(slip_max, absf(rad_to_deg(car.slip_angle)))
+		_key(KEY_A, false)
+		_key(KEY_D, false)
+		out.append("lane change by feel: straight after %.2f s, swing past straight %.1f deg, offset %.2f u, peak slip %.1f deg" % [t_done / 120.0, over2, (car.global_position - p0).dot(Vector3(0.0, 0.0, 1.0)), slip_max])
+		# Held into a corner: time to 90% of the steady yaw rate.
+		await _ks_place(pad, east, v)
+		var rates: Array[float] = []
+		_key(KEY_D, true)
+		for f in 300:
+			await _ks_step(v)
+			rates.append(absf(rad_to_deg(car.angular_velocity.y)))
+		_key(KEY_D, false)
+		var steady := 0.0
+		for r2 in rates.slice(240):
+			steady += r2
+		steady /= 60.0
+		var t90 := -1.0
+		for i in rates.size():
+			if rates[i] >= steady * 0.9:
+				t90 = i / 120.0
+				break
+		out.append("held corner: steady yaw %.0f deg/s, 90%% at %.3f s" % [steady, t90])
+		log_line("  %s (%.1f u/s): %s" % [vs[0], v, "; ".join(out)])
+		_m["key steer " + String(vs[0])] = "; ".join(out)
+	# Slide catch by keys: a yaw kick at 8 u/s, then counter-steer with the
+	# key opposite the slide while the slip is over 4 deg.
+	var catches := PackedStringArray()
+	for surf: StringName in [&"road", &"dirt", &"snow"]:
+		gb.set_meta(&"surface", surf)
+		await _ks_place(pad, east, 8.0)
+		car.angular_velocity = Vector3(0.0, 2.2, 0.0)
+		var t := 0
+		var calm := 0
+		var peak := 0.0
+		while t < 600 and calm < 36:
+			var sl := car.slip_angle
+			peak = maxf(peak, absf(rad_to_deg(sl)))
+			_key(KEY_D, sl > deg_to_rad(4.0))
+			_key(KEY_A, sl < -deg_to_rad(4.0))
+			await _ks_step(-1.0)
+			calm = calm + 1 if absf(car.slip_angle) < deg_to_rad(5.0) and absf(car.angular_velocity.y) < 0.35 else 0
+			t += 1
+		_key(KEY_A, false)
+		_key(KEY_D, false)
+		catches.append("%s: peak slip %.0f deg, caught (slip < 5 deg, yaw < 20 deg/s for 0.3 s) after %.2f s%s" % [surf, peak, (t - calm) / 120.0, "" if calm >= 36 else " NOT CAUGHT"])
+	log_line("  slide catch by keys: " + "; ".join(catches))
+	_m["key steer catch"] = "; ".join(catches)
+	gb.set_meta(&"surface", &"ground")
+	for k: Key in [KEY_A, KEY_D, KEY_W]:
+		_key(k, false)
+	car.player_input = false
+	car.teleport(world.grid_pose())
+	await _frames(10)
+
+
+func _ks_place(pad: Vector3, dir: Vector3, v: float) -> void:
+	for k: Key in [KEY_A, KEY_D, KEY_W]:
+		_key(k, false)
+	await _place(pad, dir, v)
+	await _frames(2)
+	car._steer_state = 0.0
+
+
+## One physics step holding about speed v with the throttle key (v < 0: no throttle).
+func _ks_step(v: float) -> void:
+	if v > 0.0:
+		_key(KEY_W, car.forward_speed < v - 0.1 or v >= car.top_speed * 0.99)
+	else:
+		_key(KEY_W, false)
+	await _frames(1)
+
+
+func _ks_tap(ms: int, v: float, dir: Vector3) -> Dictionary:
+	var p0 := car.global_position
+	var frames := roundi(ms * 0.12)
+	var r := {"steer": 0.0, "yaw": 0.0, "side": 0.0, "slip": 0.0}
+	for f in 120:
+		_key(KEY_D, f < frames)
+		await _ks_step(v)
+		r.steer = maxf(r.steer, absf(car._steer_state))
+		r.yaw = maxf(r.yaw, absf(rad_to_deg(car.angular_velocity.y)))
+		r.slip = maxf(r.slip, absf(rad_to_deg(car.slip_angle)))
+	_key(KEY_D, false)
+	var side := dir.cross(Vector3.UP)
+	r.side = absf((car.global_position - p0).dot(side))
+	return r

@@ -4,6 +4,7 @@
     tools/prepare_audio.py <raw dir> [--out assets/audio] [--standins <dir>]
     tools/prepare_audio.py --beeps [--out assets/audio]
     tools/prepare_audio.py --dirt <gravel recording> [--out assets/audio]
+    tools/prepare_audio.py --snow <snow recording> [--out assets/audio]
 
 <raw dir> is the sourcing folder's `raw/` (see assets/audio/CREDITS.md for where
 each file came from). Writes assets/audio/sfx/*.ogg and assets/audio/sounds.cfg,
@@ -12,7 +13,11 @@ lights' two beeps are synthesised tones (a beep is a tone); --beeps writes
 only those (and their table entries). --dirt builds only the two loose-surface
 tyre loops from the CC0 "Bike on gravel (MTB) #1" recording (BigSoundBank
 1284.flac): the roll is the recording looped, the slide is derived from it
-(high-passed and layered into a denser scrape); it adds their table entries. With --standins it
+(high-passed and layered into a denser scrape); it adds their table entries.
+--snow builds the two packed-snow loops the same way from the CC0 "Steps in the
+snow #3" recording (BigSoundBank 3363.flac), both derived: many time-offset
+copies of the footsteps summed into a continuous soft crunch (roll) and, more
+of them and duller, a soft hiss (slide). With --standins it
 instead writes synthetic test tones and a matching table into <dir> (for
 measuring the engine's pitch handling; never shipped).
 
@@ -153,11 +158,14 @@ def main():
     ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "audio"))
     ap.add_argument("--standins")
     ap.add_argument("--dirt")
+    ap.add_argument("--snow")
     a = ap.parse_args()
     if a.standins:
         return standins(a.standins)
     if a.dirt:
         return write_dirt(a.dirt, a.out)
+    if a.snow:
+        return write_snow(a.snow, a.out)
     if a.beeps:
         # Only the beeps: write them and add their sections to the table if missing.
         lines = []
@@ -286,6 +294,62 @@ def write_dirt(src, out):
     for r in (role, role2):
         if f"[{r}]" not in table:
             table = table.rstrip("\n") + "\n\n" + "\n".join([f"[{r}]", f'file="sfx/{r}.ogg"', f"gain_db={DIRT_GAIN_DB[r]:.1f}"]) + "\n"
+    open(path, "w").write(table)
+    print("updated", path)
+
+
+SNOW_GAIN_DB = {"snow_roll": -10.0, "snow_slide": -2.0}
+
+
+def lowpass(x, hz):
+    """One-pole low-pass, run twice (12 dB/oct)."""
+    a = 1.0 - np.exp(-2 * np.pi * hz / SR)
+    for _ in range(2):
+        y = np.empty_like(x)
+        prev = np.zeros(x.shape[1])
+        for i in range(len(x)):
+            prev = prev + a * (x[i] - prev)
+            y[i] = prev
+        x = y
+    return x
+
+
+def layered(x, start, count, length, spread):
+    """`count` copies of x from `start` s, each `spread` s further on, summed."""
+    n = int(length * SR)
+    out = np.zeros((n, x.shape[1]))
+    for k in range(count):
+        o = int((start + k * spread) * SR)
+        seg = x[o:o + n]
+        out[:len(seg)] += seg
+    return out / np.sqrt(count)
+
+
+def write_snow(src, out):
+    x = decode(src, 1).astype(np.float64)
+    sfx = os.path.join(out, "sfx")
+    os.makedirs(sfx, exist_ok=True)
+    made = []
+    # Roll: 8 copies, 1.37 s apart (no two steps line up), softened, pitched down.
+    roll = lowpass(layered(x, 1.0, 8, 4.0, 1.37), 3500.0)
+    idx = np.arange(0, len(roll) - 1, 0.9)
+    roll = np.stack([np.interp(idx, np.arange(len(roll)), roll[:, c]) for c in range(roll.shape[1])], axis=1)
+    # Slide: 14 copies, 0.83 s apart, duller still, no low rumble: a soft hiss.
+    slide = highpass(lowpass(layered(x, 0.5, 14, 4.0, 0.83), 2000.0), 250.0)
+    for role, sig, how in [("snow_roll", roll, "8 layers 1.37 s apart, low-pass 3.5 kHz, pitch x0.9"),
+            ("snow_slide", slide, "14 layers 0.83 s apart, band 250 Hz - 2 kHz")]:
+        loop = make_loop(sig, 3.0)
+        l0 = lufs(loop)
+        loop *= 10 ** ((LOOP_LUFS - l0) / 20)
+        loop = soft_limit(loop)
+        encode(loop, os.path.join(sfx, role + ".ogg"), 7)
+        print(f"{role}: derived from {src} ({how}), {l0:.1f} -> {lufs(loop):.1f} LUFS, peak {db(np.abs(loop).max()):.1f} dBFS")
+        made.append(role)
+    path = os.path.join(out, "sounds.cfg")
+    table = open(path).read() if os.path.exists(path) else ""
+    for r in made:
+        if f"[{r}]" not in table:
+            table = table.rstrip("\n") + "\n\n" + "\n".join([f"[{r}]", f'file="sfx/{r}.ogg"', f"gain_db={SNOW_GAIN_DB[r]:.1f}"]) + "\n"
     open(path, "w").write(table)
     print("updated", path)
 

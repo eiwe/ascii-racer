@@ -158,7 +158,7 @@ func close() -> void:
 ## the car on its grid.
 func _show_track() -> void:
 	game.set_track(track_id())
-	game.lighting.preview = PREVIEW_LIGHT
+	game.lighting.preview = _preview_light()
 	game.apply_time_of_day(game.audio.track_time(track_id()))
 	game.car.player_input = false
 	game.car.teleport(game.world.grid_pose())
@@ -170,9 +170,21 @@ func _show_track() -> void:
 
 ## Applies a time of day in the preview look.
 func _apply_time(t: String) -> void:
-	game.lighting.preview = PREVIEW_LIGHT
+	game.lighting.preview = _preview_light()
 	game.apply_time_of_day(t)
 	game.lighting.sun.directional_shadow_max_distance = PREVIEW_SHADOW_DISTANCE
+
+
+## PREVIEW_LIGHT for the shown circuit: where the circuit sets its own ground
+## colour for a time of day (Frost Pass's snowfield), the preview keeps that
+## colour, a little darker, instead of the dark ground meant for the others.
+func _preview_light() -> Dictionary:
+	var out: Dictionary = PREVIEW_LIGHT.duplicate(true)
+	var tw: Dictionary = Tracks.ALL[index].get("time_tweaks", {})
+	for t: String in out:
+		if tw.has(t) and (tw[t] as Dictionary).has("ground"):
+			out[t]["ground"] = (tw[t]["ground"] as Color).darkened(0.45)
+	return out
 
 
 func _set_ground_scale(f: float) -> void:

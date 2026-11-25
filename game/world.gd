@@ -105,11 +105,30 @@ func _static_prop(file: String, pos: Vector3, yaw_deg: float, scale_v: Variant, 
 	return body
 
 
-func add_tree(pos: Vector3, pine: bool, scale_f: float) -> void:
+func add_tree(pos: Vector3, pine: bool, scale_f: float, snow: bool = false) -> void:
 	var trunk := CylinderShape3D.new()
 	trunk.radius = 0.16 * scale_f
 	trunk.height = 0.8 * scale_f
-	_static_prop("tree-pine" if pine else "tree", pos, pos.x * 37.0, scale_f, trunk, Vector3(0.0, trunk.height * 0.5, 0.0))
+	var body := _static_prop("tree-pine" if pine else "tree", pos, pos.x * 37.0, scale_f, trunk, Vector3(0.0, trunk.height * 0.5, 0.0))
+	if snow and body != null:
+		# Snow on the top: a white cone over the upper part of the crown.
+		var top := 0.0
+		var r := 0.0
+		for mi: MeshInstance3D in body.find_children("*", "MeshInstance3D", true, false):
+			var bb := body.global_transform.affine_inverse() * mi.global_transform * mi.mesh.get_aabb()
+			top = maxf(top, bb.end.y)
+			r = maxf(r, maxf(bb.size.x, bb.size.z) * 0.5)
+		var cap := MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = 0.0
+		cm.bottom_radius = r * 0.62
+		cm.height = top * 0.42
+		cm.radial_segments = 8
+		cm.rings = 1
+		cap.mesh = cm
+		cap.material_override = _marker_material(Color("eef2f8"))
+		cap.position = Vector3(0.0, top - cm.height * 0.5 + 0.01, 0.0)
+		body.add_child(cap)
 
 
 func add_cone(pos: Vector3) -> void:
@@ -209,12 +228,12 @@ func _build_trees(theme: Dictionary, gate_pos: Vector3) -> void:
 		while z < area.end.z:
 			var p := Vector3(x + rng.randf_range(-1.3, 1.3), 0.0, z + rng.randf_range(-1.3, 1.3))
 			var keep := rng.randf() < float(theme.get("tree_keep", 0.24))
-			var pine := rng.randf() < 0.5
+			var pine: bool = rng.randf() < 0.5 or theme.get("snow", false)
 			var sc := rng.randf_range(1.15, 1.65)
 			z += step
 			if not keep or _road_distance(p) < clear + 0.25 * sc or p.distance_to(Vector3(gate_pos.x, 0.0, gate_pos.z)) < 4.0:
 				continue
-			add_tree(p, pine, sc)
+			add_tree(p, pine, sc, theme.get("snow", false))
 		x += step
 
 
@@ -240,6 +259,8 @@ func _build_cones(theme: Dictionary) -> void:
 ## corners and at the ends of the straights, hay bales beside the jumps. They
 ## stand just off the berms and are solid (a car sliding wide bumps them).
 func _build_markers(theme: Dictionary) -> void:
+	if theme.get("poles", false) or theme.get("snowbanks", false):
+		_build_snow_markers(theme)
 	if not theme.get("markers", false):
 		return
 	var h := Track.ROAD_HALF_WIDTH
@@ -262,6 +283,65 @@ func _build_markers(theme: Dictionary) -> void:
 			for u: float in [-1.0, 1.0]:
 				add_hay_bale(track.pose_at(s2, u * (h + 1.3 + track.height_at(s2) * 1.2 + 0.35)))
 		s2 += 1.6
+
+
+## Mountain markers: striped poles along both edges of the low (unrailed)
+## stretches, and snow banks (visual only, so a car sliding wide is not caught
+## on them) round the outside of the flat corners.
+func _build_snow_markers(theme: Dictionary) -> void:
+	var h := Track.ROAD_HALF_WIDTH
+	if theme.get("poles", false):
+		var s := 2.0
+		while s < track.length:
+			if track.structure_at(s) == 0:
+				for u: float in [-1.0, 1.0]:
+					add_pole(track.pose_at(s, u * (h + Track.KERB_WIDTH + 0.35)).origin)
+			s += 6.0
+	if theme.get("snowbanks", false):
+		for c in corner_apexes(1.0 / 9.0):
+			var sc: float = c[0]
+			var side: float = c[1]
+			if track.structure_at(sc) != 0:
+				continue
+			var ds := -5.0
+			while ds <= 5.0:
+				var xf := track.pose_at(sc + ds, -side * (h + Track.KERB_WIDTH + 0.75))
+				add_snowbank(xf, 0.9 - absf(ds) * 0.08)
+				ds += 1.2
+
+
+func add_pole(pos: Vector3) -> void:
+	var root := Node3D.new()
+	root.position = Vector3(pos.x, Track.GROUND_Y, pos.z)
+	for k in 4:
+		var mi := MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = 0.04
+		cm.bottom_radius = 0.04
+		cm.height = 0.22
+		cm.radial_segments = 6
+		cm.rings = 1
+		mi.mesh = cm
+		mi.material_override = _marker_material(Color("e8642c") if k % 2 == 1 else Color("23232a"))
+		mi.position = Vector3(0.0, 0.11 + 0.22 * k, 0.0)
+		root.add_child(mi)
+	props.add_child(root)
+
+
+func add_snowbank(xf: Transform3D, size: float) -> void:
+	var mi := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = 0.5
+	sm.height = 0.5
+	sm.radial_segments = 10
+	sm.rings = 4
+	mi.mesh = sm
+	mi.material_override = _marker_material(Color("dfe6f0"))
+	var fwd := -xf.basis.z
+	fwd.y = 0.0
+	mi.transform = Transform3D(Basis.looking_at(fwd.normalized(), Vector3.UP).scaled(Vector3(0.9 * size, 0.55 * size, 1.6 * size)),
+		Vector3(xf.origin.x, Track.GROUND_Y, xf.origin.z))
+	props.add_child(mi)
 
 
 const TYRE_RADIUS: float = 0.2

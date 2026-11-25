@@ -229,6 +229,10 @@ var _drift_loss_sum: float = 0.0
 ## tyre's peak) and spinning under power (0..1), for the dust and tyre sounds.
 var wheel_slide: PackedFloat32Array = [0.0, 0.0, 0.0, 0.0]
 var wheel_spin: PackedFloat32Array = [0.0, 0.0, 0.0, 0.0]
+## Per wheel, last step: grip relative to asphalt, and whether it was on a
+## surface other than asphalt or the plain ground (for split-grip braking).
+var _wheel_ratio: PackedFloat32Array = [1.0, 1.0, 1.0, 1.0]
+var _wheel_special: Array[bool] = [false, false, false, false]
 var slip_angle: float = 0.0 ## car body slip (radians), + = moving to its right
 var local_accel: Vector3 = Vector3.ZERO ## filtered, body frame: x right, z forward
 ## Per wheel (fl, fr, rl, rr): how much of the tyre's grip is asked for, 1 = at the
@@ -408,6 +412,7 @@ func _physics_process(delta: float) -> void:
 			wheel_surface[i] = &""
 			wheel_slide[i] = 0.0
 			wheel_spin[i] = 0.0
+			_wheel_special[i] = false
 			continue
 		var dist := mount.distance_to(hit.position)
 		var hub := clampf(dist - wheel_radius, 0.0, travel_up + travel_down)
@@ -444,6 +449,9 @@ func _physics_process(delta: float) -> void:
 
 		var surf_grip := (grip_road if on_road else grip_ground) if classic else grip_road * float(Surfaces.get_value(surf, "grip", 1.0))
 		_grip_ratio_sum += surf_grip / grip_road
+		var ratio_prev := _wheel_ratio[i]
+		_wheel_ratio[i] = surf_grip / grip_road
+		_wheel_special[i] = not classic
 		# Surface factors on the car's own tunables (1 on asphalt and the ground).
 		var f_rear := 1.0 if classic else float(Surfaces.get_value(surf, "rear_grip", 1.0))
 		var f_power := 1.0 if classic else float(Surfaces.get_value(surf, "power_oversteer", 1.0))
@@ -501,6 +509,13 @@ func _physics_process(delta: float) -> void:
 			braking += corner_mass * offroad_drag * absf(v_long)
 		elif not classic:
 			braking += corner_mass * float(Surfaces.get_value(surf, "drag", 0.0)) * absf(v_long)
+		# Split grip (one wheel of an axle on snow or dirt, the other not): the
+		# grippier wheel brakes no harder than its partner can (select-low, as
+		# ABS does), so braking does not yank the car round. Never on asphalt
+		# and plain ground alone.
+		var pair := i ^ 1
+		if braking > 0.0 and (_wheel_special[i] or _wheel_special[pair]) and ratio_prev > _wheel_ratio[pair]:
+			braking *= _wheel_ratio[pair] / maxf(ratio_prev, 1e-3)
 		# Brakes and drag only ever bring the contact patch to rest, never reverse it.
 		f_long -= signf(v_long) * minf(braking, absf(v_long) * stop)
 

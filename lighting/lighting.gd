@@ -394,6 +394,13 @@ var glint_highlight: bool = true:
 func _set_glint(on: bool) -> void:
 	if car == null:
 		return
+	# Not under Compatibility (the web build): there, putting the car's meshes
+	# on GLINT_LAYER for the rim light turned the teal car lime in the browser
+	# (WebGL through ANGLE; desktop GL drew it right). Without the material, the
+	# rim light or the highlight it stayed lime; only leaving the glint out
+	# entirely kept the car's own colour.
+	if compat:
+		return
 	if on and _glint_materials.is_empty():
 		var body: MeshInstance3D
 		var meshes: Array[MeshInstance3D] = []

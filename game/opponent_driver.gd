@@ -30,11 +30,11 @@ var _nitro_on: bool = false
 ## scaled by the car's grip as for the reel); wobble and the lap spread are its
 ## mistakes.
 const LEVELS: Dictionary = {
-	1: {"lateral_accel": 5.4, "brake_accel": 4.0, "steer_grip_share": 0.8, "wobble": 0.12, "lap_speed_range": Vector2(0.9, 1.0), "lap_brake_range": Vector2(0.85, 1.0), "drift_hairpin": false, "use_nitro": false, "roll_jumps": true},
-	2: {"lateral_accel": 6.15, "brake_accel": 4.7, "steer_grip_share": 0.85, "wobble": 0.1, "lap_speed_range": Vector2(0.92, 1.0), "lap_brake_range": Vector2(0.88, 1.0), "drift_hairpin": false, "use_nitro": false, "roll_jumps": true},
-	3: {"lateral_accel": 7.1, "brake_accel": 5.6, "steer_grip_share": 0.9, "wobble": 0.08, "lap_speed_range": Vector2(0.94, 1.01), "lap_brake_range": Vector2(0.9, 1.03), "drift_hairpin": false, "use_nitro": false},
-	4: {"lateral_accel": 9.0, "brake_accel": 7.0, "steer_grip_share": 0.95, "wobble": 0.05, "lap_speed_range": Vector2(0.96, 1.02), "lap_brake_range": Vector2(0.93, 1.03), "drift_hairpin": true, "use_nitro": true},
-	5: {"lateral_accel": 12.0, "brake_accel": 10.0, "steer_grip_share": 1.0, "wobble": 0.03, "lap_speed_range": Vector2(0.99, 1.01), "lap_brake_range": Vector2(0.98, 1.01), "drift_hairpin": true, "use_nitro": true},
+	1: {"jump_skill": 1, "lateral_accel": 5.4, "brake_accel": 4.0, "steer_grip_share": 0.8, "wobble": 0.12, "lap_speed_range": Vector2(0.9, 1.0), "lap_brake_range": Vector2(0.85, 1.0), "drift_hairpin": false, "use_nitro": false},
+	2: {"jump_skill": 2, "lateral_accel": 6.15, "brake_accel": 4.7, "steer_grip_share": 0.85, "wobble": 0.1, "lap_speed_range": Vector2(0.92, 1.0), "lap_brake_range": Vector2(0.88, 1.0), "drift_hairpin": false, "use_nitro": false},
+	3: {"jump_skill": 3, "lateral_accel": 7.1, "brake_accel": 5.6, "steer_grip_share": 0.9, "wobble": 0.08, "lap_speed_range": Vector2(0.94, 1.01), "lap_brake_range": Vector2(0.9, 1.03), "drift_hairpin": false, "use_nitro": false},
+	4: {"jump_skill": 4, "lateral_accel": 9.0, "brake_accel": 7.0, "steer_grip_share": 0.95, "wobble": 0.05, "lap_speed_range": Vector2(0.96, 1.02), "lap_brake_range": Vector2(0.93, 1.03), "drift_hairpin": true, "use_nitro": true},
+	5: {"jump_skill": 5, "lateral_accel": 12.0, "brake_accel": 10.0, "steer_grip_share": 1.0, "wobble": 0.03, "lap_speed_range": Vector2(0.99, 1.01), "lap_brake_range": Vector2(0.98, 1.01), "drift_hairpin": true, "use_nitro": true},
 }
 
 
@@ -128,7 +128,7 @@ func _nitro() -> void:
 		return
 	var v := car.forward_speed
 	var straight := track.max_curvature(progress, maxf(v, 1.0) * NITRO_LOOK_TIME) < NITRO_MAX_CURVATURE
-	var clear := speed_cap == INF and absf(car.slip_angle) < deg_to_rad(4.0) and car.wheels_grounded >= 3
+	var clear := speed_cap == INF and absf(car.slip_angle) < deg_to_rad(4.0) and car.wheels_grounded >= 3 and not off_line
 	if _nitro_on:
 		_nitro_on = straight and clear and car.nitro_tank > 0.0
 	else:

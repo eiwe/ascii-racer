@@ -9,7 +9,7 @@ extends RefCounted
 
 const DEFAULT_PATH: String = "res://assets/audio/sounds.cfg"
 ## Roles that loop (their streams are set to loop when loaded).
-const LOOPED: PackedStringArray = ["tyre_squeal", "tyre_skid", "nitro_sustain", "dirt_roll", "dirt_slide"]
+const LOOPED: PackedStringArray = ["tyre_squeal", "tyre_skid", "nitro_sustain", "dirt_roll", "dirt_slide", "snow_roll", "snow_slide"]
 
 var path: String = DEFAULT_PATH
 var _cfg := ConfigFile.new()

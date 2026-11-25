@@ -13,6 +13,7 @@
 ##   coast       x Car.rolling_decel and engine_braking off the throttle
 ##   brake       x Car.brake_decel (below 1: longer stops)
 ##   drift_loss  x Car.drift_speed_loss (below 1: longer drifts)
+##   bright      drawn without the track's darkening tint (snow must outshine the ground)
 ##   dust        colour of the dust a sliding or spinning wheel kicks up (none: no dust)
 ##   on_road     counts as the circuit (lap logic, resets, drift surface)
 ##   colour      road colour in the generator
@@ -34,8 +35,12 @@ const TABLE: Dictionary = {
 	# drag on the throttle: top speed and nitro as on asphalt.
 	&"dirt": {"grip": 0.78, "peak_slip": 1.6, "slide_grip": 1.1, "drag": 0.0, "rear_grip": 0.95, "power_oversteer": 1.35,
 		"coast": 1.35, "brake": 0.8, "drift_loss": 0.65, "on_road": true, "colour": Color("b07a40"), "sound": "dirt", "dust": Color("c8a070")},
-	# Packed snow: low grip, long slides, almost no drag.
-	&"snow": {"grip": 0.55, "peak_slip": 1.9, "slide_grip": 1.1, "drag": 0.05, "on_road": true, "colour": Color("dfe6f0"), "sound": "snow"},
+	# Packed snow: far less grip than dirt, a broad, forgiving peak, slides
+	# that hold and steer, long stops; the rear is not looser than the front and
+	# lifting off does little, so the car runs wide rather than spinning; a
+	# little wheelspin at launch.
+	&"snow": {"grip": 0.57, "peak_slip": 2.0, "slide_grip": 1.12, "drag": 0.0, "rear_grip": 1.0, "power_oversteer": 1.0,
+		"coast": 0.9, "brake": 0.62, "drift_loss": 0.75, "on_road": true, "colour": Color("dfe6f0"), "sound": "snow", "dust": Color("eef3fa"), "bright": true},
 }
 
 

@@ -45,8 +45,9 @@ const DRIFT_CURVATURE: float = 0.18
 var drift_chance_other: float = 0.4
 ## Whether the hairpin is taken with the handbrake drift.
 var drift_hairpin: bool = true
-## Ride over jumps that have a roll speed instead of clearing them (careful levels).
-var roll_jumps: bool = false
+## Jump skill (a level, 1..5): jumps whose "roll_level" is at least this are
+## ridden over at their roll speed instead of cleared.
+var jump_skill: int = 5
 ## Hand steadiness: amplitude of the line's wobble (units), and the lap-to-lap
 ## spread of corner speed and braking (multipliers, min..max).
 var wobble: float = 0.06
@@ -68,6 +69,10 @@ var _flat_out: Array[Vector2] = []
 const SLIDE_CATCH_DEG: float = 8.0
 ## Off the line by more than this at a jump with a planned speed: roll it instead.
 const JUMP_LINE_TOLERANCE: float = 0.6
+## Snow (grip below SNOW_GRIP, dirt is above it): the racing line uses this share
+## of its usual width.
+const SNOW_GRIP: float = 0.7
+const SNOW_WIDTH: float = 0.75
 ## Loose surface (dirt): slides are part of driving it. The steering limit
 ## allows this much more than the grip plan, a slide is caught only past
 ## LOOSE_CATCH_DEG, with a softer counter-steer and yaw-rate damping.
@@ -111,6 +116,10 @@ var _time: float = 0.0
 var _drift_corner: int = -1
 var _drift_tap: float = 0.0
 var _drift_plan: Array[bool] = []
+var _snow_track: bool = false
+## On a snow circuit: more than OFF_LINE off the racing line (it slid wide).
+var off_line: bool = false
+const OFF_LINE: float = 0.7
 ## Recovery.
 var _stuck: float = 0.0
 var _reverse: float = 0.0
@@ -126,6 +135,12 @@ func _ready() -> void:
 	else:
 		_rng.randomize()
 	_flat_out = track.flat_out_ranges()
+	# Circuits with snow: a car that slid off its line recovers before it
+	# accelerates (see off_line).
+	for i in 200:
+		if track.grip_at(track.length * i / 200.0) < SNOW_GRIP:
+			_snow_track = true
+			break
 	_build_line()
 	_find_corners()
 	_new_lap()
@@ -145,6 +160,10 @@ func _in_flat_out(s: float, margin: float) -> bool:
 func _width_at(s: float) -> float:
 	if _in_flat_out(s, 1.0):
 		return WIDTH_JUMP
+	# On snow the line keeps a margin from the edges for the slide.
+	for ahead: float in [0.0, 2.0, 4.0]:
+		if track.grip_at(s + ahead) < SNOW_GRIP:
+			return width_flat * SNOW_WIDTH
 	# Narrow a little before a raised stretch (walls) starts, not at it.
 	for ahead: float in [0.0, 1.5, 3.0]:
 		if track.structure_at(s + ahead) != 0:
@@ -192,8 +211,16 @@ func _find_corners() -> void:
 			turn += absf(track.curvature[j]) * ds
 			j += 1
 		# A banked turn is driven on the banking, never drifted.
-		var banked := track.bank_at((i + j) * 0.5 * ds) != 0.0
-		var loose := track.grip_at((i + j) * 0.5 * ds) < 1.0
+		# A banked turn is driven on the banking, a raised one (rails) is not drifted.
+		var banked := track.bank_at((i + j) * 0.5 * ds) != 0.0 or track.structure_at((i + j) * 0.5 * ds) != 0
+		# Loose but not snow (dirt): its tight corners are drifted. On snow a
+		# handbrake drift carries too far; the car slides enough on its own.
+		var g_mid := track.grip_at((i + j) * 0.5 * ds)
+		var loose := g_mid < 1.0 and g_mid >= SNOW_GRIP
+		# Snow in the corner or just after it: no handbrake drift there at all.
+		for q in 9:
+			if track.grip_at(i * ds + (j - i) * ds * q / 8.0 + (6.0 if q == 8 else 0.0)) < SNOW_GRIP:
+				banked = true
 		_corners.append([i * ds, j * ds, signf(k), turn > deg_to_rad(150.0) and not banked, banked, loose and turn > deg_to_rad(80.0)])
 		i = j
 
@@ -237,9 +264,11 @@ func _build_speed() -> void:
 		var b := pts[i]
 		var c := pts[(i + 1) % n]
 		var k := _curvature(Vector2(a.x, a.z), Vector2(b.x, b.z), Vector2(c.x, c.z))
-		_speed[i] = minf(20.0, sqrt(_corner_accel(a_lat, i * ds) / maxf(k, 1e-4)))
+		# Planned on the line's own surface (on part-width snow the line may be
+		# on asphalt beside it).
+		_speed[i] = minf(20.0, sqrt(track.corner_accel(a_lat, i * ds, _offset[i] * _lap_amp) / maxf(k, 1e-4)))
 		# Jumps with planned take-off speeds (clear or roll them).
-		var js := track.jump_speed_at(i * ds, roll_jumps)
+		var js := track.jump_speed_at(i * ds, jump_skill)
 		if js < INF:
 			_speed[i] = minf(_speed[i], js)
 	var decel := brake_accel * _lap_brake * grip
@@ -247,7 +276,7 @@ func _build_speed() -> void:
 		for j in range(n - 1, -1, -1):
 			var nxt := _speed[(j + 1) % n]
 			# Less grip (a loose surface), longer braking.
-			var g := track.grip_at(j * ds)
+			var g := track.grip_at(j * ds, _offset[j] * _lap_amp)
 			_speed[j] = minf(_speed[j], sqrt(nxt * nxt + 2.0 * (decel if g == 1.0 else decel * g) * ds))
 
 
@@ -328,32 +357,43 @@ func _physics_process(delta: float) -> void:
 		# What the road allows here: the surface's grip, and on banking more
 		# (as in the speed plan; exactly a_max on flat asphalt). A loose
 		# surface is driven with the tyres sliding a little.
-		var g := track.grip_at(progress)
-		a_max = track.corner_accel(a_max, progress)
+		var lat_now := track.lateral_offset(pos, progress)
+		var g := track.grip_at(progress, lat_now)
+		a_max = track.corner_accel(a_max, progress, lat_now)
 		if g < 1.0:
 			a_max *= LOOSE_STEER_MARGIN
 		if track.bank_at(progress) != 0.0:
 			a_max *= BANK_STEER_MARGIN
+		# Off the line after a slide on a snow circuit: steer harder to get back.
+		if _snow_track:
+			var n_o := _offset.size()
+			var f_o := fposmod(progress, track.length) / track.length * n_o
+			var line_o := lerpf(_offset[int(f_o) % n_o], _offset[(int(f_o) + 1) % n_o], f_o - int(f_o)) * _lap_amp + lateral_bias
+			off_line = absf(lat_now - line_o) > OFF_LINE
+			if off_line:
+				a_max *= 2.0
 		var cap := atan(WHEELBASE * a_max / (v * v)) / lock
 		steer = clampf(steer, -cap, cap)
 
 	# Speed: aim for the profile a little ahead (reaction time).
 	var want := minf(_speed_at(progress + maxf(v, 0.0) * 0.3), speed_cap)
+	if off_line:
+		want = minf(want, maxf(v, 4.0)) # back on the line before speeding up
 	# Badly off the line coming up to a jump with a planned speed: back off to
 	# the roll speed (taking off sideways lands off the road).
 	var s_jump := progress + maxf(v, 0.0) * 0.5
-	if track.jump_speed_at(s_jump, roll_jumps) < INF and not roll_jumps:
+	if track.jump_speed_at(s_jump, jump_skill) < INF and track.jump_speed_at(s_jump, jump_skill) > track.jump_speed_at(s_jump, 0):
 		var n := _offset.size()
 		var f := fposmod(progress, track.length) / track.length * n
 		var line_lat := lerpf(_offset[int(f) % n], _offset[(int(f) + 1) % n], f - int(f)) * _lap_amp + lateral_bias
 		if absf(track.lateral_offset(pos, progress) - line_lat) > JUMP_LINE_TOLERANCE:
-			want = minf(want, track.jump_speed_at(s_jump, true))
+			want = minf(want, track.jump_speed_at(s_jump, 0))
 	var thr := clampf((want - v) * 1.6 + 0.15, 0.0, 1.0)
 	var brk := clampf((v - want - 0.25) * 0.9, 0.0, 1.0)
 	if lost:
 		want = 3.0
 		thr = clampf((want - v) * 1.5, 0.0, 0.7)
-	var flat := _in_flat_out(progress, 0.0) and track.jump_speed_at(progress, roll_jumps) == INF
+	var flat := _in_flat_out(progress, 0.0) and track.jump_speed_at(progress, jump_skill) == INF
 	if flat:
 		thr = 1.0
 		brk = 0.0
@@ -380,7 +420,7 @@ func _physics_process(delta: float) -> void:
 				steer = dir * maxf(absf(steer), 0.5)
 			thr = clampf(0.85 - car.drift_angle * 0.6, 0.4, 1.0)
 			brk = 0.0
-	elif track.grip_at(progress) < 1.0:
+	elif track.grip_at(progress, track.lateral_offset(pos, progress)) < 1.0:
 		# Loose surface: sliding is normal. Catch only a real slide, gently and
 		# damped by the yaw rate (a hard catch swapped ends on dirt).
 		if absf(car.slip_angle) > deg_to_rad(LOOSE_CATCH_DEG) and v > 1.5:

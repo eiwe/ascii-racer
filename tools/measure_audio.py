@@ -108,6 +108,8 @@ def main():
             if g("skid") > 0.05: lay.append(f"skid {g('skid'):.2f}")
             if "dirt_roll" in rs[0] and g("dirt_roll") > 0.05: lay.append(f"dirt roll {g('dirt_roll'):.2f}")
             if "dirt_slide" in rs[0] and g("dirt_slide") > 0.05: lay.append(f"dirt slide {g('dirt_slide'):.2f}")
+            if "snow_roll" in rs[0] and g("snow_roll") > 0.05: lay.append(f"snow roll {g('snow_roll'):.2f}")
+            if "snow_slide" in rs[0] and g("snow_slide") > 0.05: lay.append(f"snow slide {g('snow_slide'):.2f}")
             if g("nitro") > 0.05: lay.append(f"nitro {g('nitro'):.2f}")
             ev = " ".join(r["events"] for r in rs if r["events"])
             if ev: lay.append("events: " + ev)

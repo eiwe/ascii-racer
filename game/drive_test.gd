@@ -169,7 +169,7 @@ func _run() -> void:
 		if arg.begins_with("--dtonly="):
 			only = arg.trim_prefix("--dtonly=")
 	for t: String in ["spawn", "accel_brake", "corners", "limit", "nitro", "nitro_shots", "turns", "handbrake", "drift", "feel", "offroad", "kerbs", "tree", "cones", "jump", "bridge", "reset_bridge", "keys",
-			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting", "level_select", "tracks", "camera_blend", "time_of_day", "dirt_feel", "dust_tour", "abuse", "opp_trace"]:
+			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting", "level_select", "tracks", "camera_blend", "time_of_day", "dirt_feel", "dust_tour", "abuse", "opp_trace", "bank_iso"]:
 		if only == "" or t in only.split(","):
 			await call("_test_" + t)
 	log_line("\n[summary] preset %s" % game.tuning.current)
@@ -2931,7 +2931,7 @@ func _test_audio() -> void:
 	log_line("\n[audio] scenarios for the recording (see 70_audio_*.csv)")
 	var ca: CarAudio = game.car_audio
 	var au: AudioDirector = game.audio
-	var rows := PackedStringArray(["frame,scenario,rpm,gear,load,squeal,skid,nitro,speed,master_peak_db,music_peak_db,sfx_peak_db,w0,w1,w2,p0,p1,p2,events,dirt_roll,dirt_slide"])
+	var rows := PackedStringArray(["frame,scenario,rpm,gear,load,squeal,skid,nitro,speed,master_peak_db,music_peak_db,sfx_peak_db,w0,w1,w2,p0,p1,p2,events,dirt_roll,dirt_slide,snow_roll,snow_slide"])
 	var segs := PackedStringArray(["scenario,first_frame,last_frame"])
 	var state := {"scn": "", "frame": 0, "first": 0, "ev": 0}
 	var rec := func() -> void:
@@ -2943,12 +2943,12 @@ func _test_audio() -> void:
 			var e: Array = ca.events[state.ev]
 			ev.append("%s:%.2f" % [e[1], e[2]])
 			state.ev += 1
-		rows.append("%d,%s,%.1f,%d,%.2f,%.3f,%.3f,%.2f,%.2f,%.1f,%.1f,%.1f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%s,%.3f,%.3f" % [state.frame, state.scn, ca.rpm, ca.gear, ca.load,
+		rows.append("%d,%s,%.1f,%d,%.2f,%.3f,%.3f,%.2f,%.2f,%.1f,%.1f,%.1f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%s,%.3f,%.3f,%.3f,%.3f" % [state.frame, state.scn, ca.rpm, ca.gear, ca.load,
 			ca.squeal, ca.skid, car.nitro_level, car.linear_velocity.length(),
 			AudioServer.get_bus_peak_volume_left_db(0, 0), AudioServer.get_bus_peak_volume_left_db(AudioServer.get_bus_index("Music"), 0),
 			AudioServer.get_bus_peak_volume_left_db(AudioServer.get_bus_index("SFX"), 0),
 			w[0] if w.size() > 0 else 0.0, w[1] if w.size() > 1 else 0.0, w[2] if w.size() > 2 else 0.0,
-			pz[0] if pz.size() > 0 else 0.0, pz[1] if pz.size() > 1 else 0.0, pz[2] if pz.size() > 2 else 0.0, " ".join(ev), ca.dirt_roll, ca.dirt_slide])
+			pz[0] if pz.size() > 0 else 0.0, pz[1] if pz.size() > 1 else 0.0, pz[2] if pz.size() > 2 else 0.0, " ".join(ev), ca.dirt_roll, ca.dirt_slide, ca.snow_roll, ca.snow_slide])
 	get_tree().process_frame.connect(rec)
 	var seg := func(name: String) -> void:
 		if state.scn != "":
@@ -3053,9 +3053,9 @@ func _test_audio() -> void:
 	# Loose surface: open ground set to dirt, against the same ground set to asphalt.
 	var gb: StaticBody3D = (game.track as Track).ground_body
 	var field: Vector3 = (game.track as Track).bounds.end + Vector3(30.0, 0.0, 30.0) # open ground
-	for surf: StringName in [&"road", &"dirt"]:
+	for surf: StringName in [&"road", &"dirt", &"snow"]:
 		gb.set_meta(&"surface", surf)
-		var tag := "asphalt" if surf == &"road" else "dirt"
+		var tag := "asphalt" if surf == &"road" else String(surf)
 		await _place(field, Vector3.RIGHT, 6.0)
 		seg.call("%s_cruise" % tag)
 		for i in 120 * 2:
@@ -4450,14 +4450,46 @@ func _test_tracks() -> void:
 	log_line("\n[tracks] switching circuits and driving the second one")
 	await _frames(10)
 	var nodes0 := get_tree().get_node_count()
-	var other: String = Tracks.ALL[1].id
+	for other in Tracks.ids().slice(1):
+		await _track_visit(other)
+	game.set_track(Tracks.DEFAULT_ID)
+	car.teleport(game.world.grid_pose())
+	camera.snap_to_target()
+	await _frames(30)
+	var nodes1 := get_tree().get_node_count()
+	for i in 3:
+		for o in Tracks.ids().slice(1):
+			game.set_track(o)
+			await _frames(2)
+		await _frames(2)
+		game.set_track(Tracks.DEFAULT_ID)
+		await _frames(2)
+	await _frames(30)
+	var nodes2 := get_tree().get_node_count()
+	log_line("  nodes: before %d, after a visit %d, after three more round trips %d" % [nodes0, nodes1, nodes2])
+	_m["track switching nodes"] = "%d / %d / %d" % [nodes0, nodes1, nodes2]
+	car.teleport(game.world.grid_pose())
+	game.laps.reset()
+	camera.snap_to_target()
+	await _frames(30)
+
+
+
+## The player's view switch: an eased dolly-zoom between the iso and chase
+## cameras. Frames during the move, the weight's shape (monotonic, no
+## overshoot), a reversal mid-move, and the right camera at the end.
+
+
+## One circuit other than Figure Eight: build, probe, autopilot laps, the reel
+## driver, the level-5 opponent (results keyed by the circuit's id).
+func _track_visit(other: String) -> void:
 	var t0 := Time.get_ticks_usec()
 	game.set_track(other)
 	var build_ms := (Time.get_ticks_usec() - t0) / 1000.0
 	var tr: Track = game.track
 	log_line("  %s: length %.1f, built in %.0f ms; flat-out ranges %s; banked %.0f deg max" % [other, tr.length, build_ms,
 		str(tr.flat_out_ranges()), rad_to_deg(Array(tr.banks).map(func(b: float) -> float: return absf(b)).max())])
-	for sid in [&"road", &"dirt"]:
+	for sid: StringName in Surfaces.TABLE.keys():
 		log_line("    surface %s: %d colliders" % [sid, tr.find_children("*", "StaticBody3D", true, false).filter(func(b: Node) -> bool: return b.get_meta(&"surface", &"") == sid).size()])
 	await _frames(2)
 	var space := car.get_world_3d().direct_space_state
@@ -4506,7 +4538,7 @@ func _test_tracks() -> void:
 			break
 	_stop_line(ap)
 	log_line("    autopilot: laps %s, max lean on the banking %.0f deg, frames in the air %d" % [str(laps.map(func(t: float) -> String: return LapTimer.fmt(t))), lean_max, air])
-	_m["track2 autopilot"] = "laps %s, lean %.0f, air %d" % [str(laps.map(func(t: float) -> String: return LapTimer.fmt(t))), lean_max, air]
+	_m[other + " autopilot"] = "laps %s, lean %.0f, air %d" % [str(laps.map(func(t: float) -> String: return LapTimer.fmt(t))), lean_max, air]
 	# Reel driver and the level-5 opponent, each from the grid.
 	car.teleport(game.world.grid_pose())
 	game.laps.reset()
@@ -4528,39 +4560,16 @@ func _test_tracks() -> void:
 			break
 	d.queue_free()
 	log_line("    reel driver: laps %s, resets %d" % [str(laps.map(func(t: float) -> String: return LapTimer.fmt(t))), resets])
-	_m["track2 reel driver"] = "laps %s, resets %d" % [str(laps.map(func(t: float) -> String: return LapTimer.fmt(t))), resets]
+	_m[other + " reel driver"] = "laps %s, resets %d" % [str(laps.map(func(t: float) -> String: return LapTimer.fmt(t))), resets]
 	var opp := _opp_on(5)
 	_park_player()
 	await _frames(120 * 30)
 	log_line("    opponent L5, 30 s: %s, resets %d" % [opp.status_text(), opp.resets])
-	_m["track2 opponent L5"] = "resets %d" % opp.resets
+	_m[other + " opponent L5"] = "resets %d" % opp.resets
 	_opp_off()
 	car.freeze = false
 	# Back to track 1 and leaks.
-	game.set_track(Tracks.DEFAULT_ID)
-	car.teleport(game.world.grid_pose())
-	camera.snap_to_target()
-	await _frames(30)
-	var nodes1 := get_tree().get_node_count()
-	for i in 3:
-		game.set_track(other)
-		await _frames(2)
-		game.set_track(Tracks.DEFAULT_ID)
-		await _frames(2)
-	await _frames(30)
-	var nodes2 := get_tree().get_node_count()
-	log_line("  nodes: before %d, after a visit %d, after three more round trips %d" % [nodes0, nodes1, nodes2])
-	_m["track switching nodes"] = "%d / %d / %d" % [nodes0, nodes1, nodes2]
-	car.teleport(game.world.grid_pose())
-	game.laps.reset()
-	camera.snap_to_target()
-	await _frames(30)
 
-
-
-## The player's view switch: an eased dolly-zoom between the iso and chase
-## cameras. Frames during the move, the weight's shape (monotonic, no
-## overshoot), a reversal mid-move, and the right camera at the end.
 func _test_camera_blend() -> void:
 	log_line("\n[camera blend] iso -> chase -> iso, and a reversal")
 	game.set_chase_view(false)
@@ -4672,7 +4681,7 @@ func _test_dirt_feel() -> void:
 	var gb: StaticBody3D = (game.track as Track).ground_body
 	var pad: Vector3 = (game.track as Track).bounds.end + Vector3(30.0, 0.0, 30.0)
 	var east := Vector3(1.0, 0.0, 0.0)
-	for surf: StringName in [&"road", &"dirt"]:
+	for surf: StringName in [&"road", &"dirt", &"snow"]:
 		gb.set_meta(&"surface", surf)
 		var out := PackedStringArray()
 		# Launch from rest: speed after 1 s and 2 s, rear wheelspin.
@@ -4758,6 +4767,43 @@ func _test_dirt_feel() -> void:
 		_inputs(0.0, 0.0, 0.0, false)
 		log_line("  %s: %s" % [surf, "; ".join(out)])
 		_m["feel " + String(surf)] = "; ".join(out)
+	# Split grip: a strip of snow under the left wheels only (the right on
+	# asphalt): how much does braking from 10 and accelerating from 2 yaw the car,
+	# against all asphalt?
+	gb.set_meta(&"surface", &"road")
+	var strip := StaticBody3D.new()
+	strip.collision_layer = Track.LAYER_SURFACE
+	strip.set_meta(&"surface", &"snow")
+	var cs := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(60.0, 0.1, 1.0)
+	cs.shape = box
+	strip.add_child(cs)
+	strip.position = Vector3(pad.x + 20.0, Track.GROUND_Y - 0.05 + 0.0015, pad.z - 0.5) # z < pad.z: the car's left, heading east
+	var lines := PackedStringArray()
+	for split: bool in [false, true]:
+		if split:
+			world.add_child(strip)
+		for test: String in ["brake from 10", "throttle from 2"]:
+			_place(pad, east, 10.0 if test.begins_with("brake") else 2.0)
+			await _frames(2)
+			_inputs(0.0, 0.0 if test.begins_with("brake") else 1.0, 1.0 if test.begins_with("brake") else 0.0, false)
+			var yaw0 := car.global_basis.get_euler().y
+			var peak_rate := 0.0
+			var on_snow := 0
+			for f in 180:
+				await _frames(1)
+				peak_rate = maxf(peak_rate, absf(car.angular_velocity.y))
+				if car.wheel_surface[0] == &"snow" or car.wheel_surface[2] == &"snow":
+					on_snow += 1
+				if test.begins_with("brake") and car.forward_speed < 0.3:
+					break
+			var turned := rad_to_deg(wrapf(car.global_basis.get_euler().y - yaw0, -PI, PI))
+			lines.append("%s %s: heading change %+.1f deg, peak yaw rate %.0f deg/s (left wheels on snow %d frames)" % ["half on snow" if split else "all asphalt", test, turned, rad_to_deg(peak_rate), on_snow])
+	strip.queue_free()
+	for l in lines:
+		log_line("  " + l)
+	_m["split grip"] = "; ".join(lines)
 	gb.set_meta(&"surface", &"ground")
 	car.teleport(world.grid_pose())
 	await _frames(10)
@@ -4769,10 +4815,12 @@ func _test_dirt_feel() -> void:
 ## slides). Also the frame rate with the dust on.
 func _test_dust_tour() -> void:
 	log_line("\n[dust tour] Dust Bowl's features in iso and chase, each time of day")
-	var other := "dust_bowl"
+	# The circuit from --dttrack (Dust Bowl when none is given), its places from
+	# its tests.tour.
+	var other: String = track.def.id if track.def.id != Tracks.DEFAULT_ID else "dust_bowl"
 	game.set_track(other)
 	await _frames(5)
-	var pois: Array = [["grid", 2.5], ["table_top", 17.5], ["bank1", 53.0], ["double", 80.0], ["hairpin", 96.5], ["bank2", 122.0], ["step_down", 146.0], ["flat_right", 164.5]]
+	var pois: Array = track.def.get("tests", {}).get("tour", [["grid", 2.5], ["table_top", 17.5], ["bank1", 53.0], ["double", 80.0], ["hairpin", 96.5], ["bank2", 122.0], ["step_down", 146.0], ["flat_right", 164.5]])
 	for t: String in ["morning", "noon", "night"]:
 		game.apply_time_of_day(t)
 		for poi: Array in pois:
@@ -4797,10 +4845,10 @@ func _test_dust_tour() -> void:
 						break
 				ap.enabled = false
 				ap.queue_free()
-			await _shot("85_dust_%s_%s_iso.png" % [t, poi[0]])
+			await _shot("85_%s_%s_%s_iso.png" % [other, t, poi[0]])
 			game.set_chase_view(true)
 			await _frames(2)
-			await _shot("85_dust_%s_%s_chase.png" % [t, poi[0]])
+			await _shot("85_%s_%s_%s_chase.png" % [other, t, poi[0]])
 			game.set_chase_view(false)
 			_inputs(0.0, 0.0, 0.0, false)
 	game.apply_time_of_day("morning")
@@ -4815,6 +4863,10 @@ func _test_dust_tour() -> void:
 ## worst pitch / roll, slip after landing, wall contacts, and where the car
 ## ends up 2 s later (on the road and upright = fine).
 func _test_abuse() -> void:
+	var cases: Array = track.def.get("tests", {}).get("abuse", [])
+	if not cases.is_empty():
+		await _abuse_cases(cases)
+		return
 	log_line("\n[abuse] Dust Bowl's jumps and banked turns driven badly")
 	game.set_track("dust_bowl")
 	await _frames(5)
@@ -4986,3 +5038,145 @@ func _test_opp_trace() -> void:
 			t, sp, lat, drv._line_lateral(sp), oc.forward_speed, drv._speed_at(sp), rad_to_deg(oc.slip_angle), rad_to_deg(oc.angular_velocity.y),
 			oc.wheels_grounded, oc.steer_input, oc.throttle_input, oc.brake_input, oc.handbrake_input, oc.drift_state, oc.nitro_level, drv.resets])
 	_opp_off()
+
+
+
+## Banked turns in the isometric view: five evenly spaced points through each
+## banked arc of the current circuit (--dttrack), each time of day, 16:9 and
+## 21:9. Per shot: how far ahead the road centre stays visible from the iso
+## camera (rays along the camera axis, walls and road count as cover), and
+## the share of the road +-0.9 across that is visible over the next 10.
+func _test_bank_iso() -> void:
+	var tr: Track = game.track
+	log_line("\n[bank iso] %s: the road ahead through the banked turns, iso view" % tr.def.id)
+	game.set_chase_view(false)
+	var arcs: Array[Vector2] = []
+	var n := tr.points.size()
+	var ds := tr.length / n
+	var i := 0
+	while i < n:
+		if tr.bank_at(i * ds) != 0.0 and absf(tr.curvature[i]) > 0.05:
+			var j := i
+			while j < n and absf(tr.curvature[j]) > 0.05:
+				j += 1
+			arcs.append(Vector2(i * ds, j * ds))
+			i = j
+		i += 1
+	var worst := INF
+	var worst_share := 1.0
+	for asp: Array in [["16x9", Vector2i(1600, 900)], ["21x9", Vector2i(2100, 900)]]:
+		renderer.fixed_output_size = asp[1]
+		for t: String in ["morning", "noon", "night"]:
+			game.apply_time_of_day(t)
+			for a_i in arcs.size():
+				var arc: Vector2 = arcs[a_i]
+				for k in 5:
+					var s_at := arc.x + (arc.y - arc.x) * (k + 0.5) / 5.0
+					await _place_on_track(s_at - 0.5, 0.0, 0.0)
+					car.linear_velocity = -car.global_basis.z * 0.0
+					camera.snap_to_target()
+					await _frames(20)
+					camera.snap_to_target()
+					await _frames(2)
+					var space := car.get_world_3d().direct_space_state
+					var back := camera.global_basis.z
+					var vis := 0.0
+					var seen := 0
+					var total := 0
+					var d := 0.5
+					var blocked := false
+					while d <= 12.0:
+						for u: float in [-0.9, 0.0, 0.9]:
+							var p := tr.pose_at(s_at + d, u).origin + tr.pose_at(s_at + d, u).basis.y * 0.05
+							var q := PhysicsRayQueryParameters3D.create(p + back * 0.05, p + back * 40.0, Track.LAYER_SURFACE | Track.LAYER_PROPS)
+							q.exclude = [car.get_rid()]
+							var h := space.intersect_ray(q)
+							if d <= 10.0:
+								total += 1
+								if h.is_empty():
+									seen += 1
+							if u == 0.0 and not h.is_empty() and not blocked:
+								blocked = true
+								vis = d - 0.5
+						d += 0.5
+					if not blocked:
+						vis = 12.0
+					var share := float(seen) / maxf(total, 1)
+					worst = minf(worst, vis)
+					worst_share = minf(worst_share, share)
+					await _shot("87_bank_%s_%s_turn%d_%d.png" % [asp[0], t, a_i + 1, k + 1])
+					log_line("  %s %-7s turn %d point %d (s %5.1f): road centre visible %4.1f ahead, %3.0f%% of the road over the next 10" % [asp[0], t, a_i + 1, k + 1, s_at, vis, share * 100.0])
+	renderer.fixed_output_size = SHOT_SIZE
+	game.apply_time_of_day("morning")
+	log_line("  worst: centre visible %.1f ahead, %.0f%% of the road" % [worst, worst_share * 100.0])
+	_m["bank iso"] = "%s: worst %.1f ahead visible, %.0f%% of the road over 10" % [tr.def.id, worst, worst_share * 100.0]
+
+
+
+## A circuit's own abuse list (tests.abuse): [name, s start, s end, speed, lateral,
+## brake from s (or -1), nitro]. The car is held at the speed (no more), steered
+## for the line at that lateral offset, brakes hard from the given point until
+## it is down to 4.5 u/s; ok = on the road and upright at the end, or back on
+## it and going within 3 s.
+func _abuse_cases(cases: Array) -> void:
+	var tr: Track = game.track
+	log_line("\n[abuse] %s driven badly" % tr.def.id)
+	var bad := 0
+	for c: Array in cases:
+		var s0: float = c[1]
+		var s_end: float = c[2]
+		var v: float = c[3]
+		var lat0: float = c[4]
+		var brake_from: float = c[5]
+		var nitro: bool = c[6]
+		await _place_on_track(s0, lat0, v)
+		var hint := s0
+		var t := 0.0
+		var slip := 0.0
+		var yaw_max := 0.0
+		var stick := 0.0
+		var braking := false
+		while t < 10.0:
+			await _frames(1)
+			t += 1.0 / 120.0
+			hint = tr.progress(car.global_position, hint)
+			if brake_from >= 0.0 and hint >= brake_from and car.forward_speed > 4.5:
+				braking = true
+			elif braking and car.forward_speed <= 4.5:
+				braking = false
+				brake_from = -1.0
+			# A reasonable driver: the entry speed is held for the first 3 units,
+			# then part throttle; the stick moves at a hand's speed and catches
+			# a slide with counter-steer.
+			var entry := fposmod(hint - s0, tr.length) < 3.0
+			var thr := 0.0 if braking or car.forward_speed > v else (1.0 if entry else 0.35)
+			car.nitro_input = nitro and entry and not braking and car.wheels_grounded > 0
+			var want := _pursuit_steer_lat(hint, lat0)
+			if absf(car.slip_angle) > deg_to_rad(10.0):
+				want = clampf(want + car.slip_angle / deg_to_rad(20.0), -1.0, 1.0)
+			stick = move_toward(stick, want, 8.0 / 120.0)
+			_inputs(stick, thr, 1.0 if braking else 0.0, false)
+			slip = maxf(slip, absf(rad_to_deg(car.slip_angle)))
+			yaw_max = maxf(yaw_max, absf(rad_to_deg(car.angular_velocity.y)))
+			if fposmod(hint - s_end, tr.length) < 2.0 and t > 0.5:
+				break
+		car.nitro_input = false
+		var lat := tr.lateral_offset(car.global_position, hint)
+		var ok := car.is_upright() and absf(lat) < Track.ROAD_HALF_WIDTH + 0.3
+		var note := ""
+		if not ok and car.is_upright():
+			for i in 360:
+				await _frames(1)
+				hint = tr.progress(car.global_position, hint)
+				_inputs(_pursuit_steer(hint), 0.6, 0.0, false)
+				if absf(tr.lateral_offset(car.global_position, hint)) < Track.ROAD_HALF_WIDTH and car.forward_speed > 2.0:
+					ok = true
+					note = "  (wide, back on the road and going within %.1f s)" % (i / 120.0)
+					break
+		_inputs(0.0, 0.0, 0.0, false)
+		if not ok:
+			bad += 1
+		log_line("  %-48s %4.1f u/s: peak slip %3.0f deg, yaw rate %4.0f deg/s, ends s %5.1f lat %+.2f %s%s" % [c[0], v, slip, yaw_max, hint, lat,
+			"upright" if car.is_upright() else "ON ITS SIDE/ROOF", note if ok else "  << BAD"])
+	log_line("  %d of %d runs bad" % [bad, cases.size()])
+	_m["abuse " + tr.def.id] = "%d of %d runs bad" % [bad, cases.size()]

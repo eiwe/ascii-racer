@@ -169,7 +169,7 @@ func _run() -> void:
 		if arg.begins_with("--dtonly="):
 			only = arg.trim_prefix("--dtonly=")
 	for t: String in ["spawn", "accel_brake", "corners", "limit", "nitro", "nitro_shots", "turns", "handbrake", "drift", "feel", "offroad", "kerbs", "tree", "cones", "jump", "bridge", "reset_bridge", "keys",
-			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting", "level_select", "tracks", "camera_blend", "time_of_day", "dirt_feel", "dust_tour", "abuse", "opp_trace", "bank_iso", "key_steer", "glyph_table", "mobile", "mobile_shots"]:
+			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting", "level_select", "tracks", "camera_blend", "time_of_day", "dirt_feel", "dust_tour", "abuse", "opp_trace", "bank_iso", "key_steer", "glyph_table", "mobile", "mobile_shots", "mobile_level"]:
 		if only == "" or t in only.split(","):
 			await call("_test_" + t)
 	log_line("\n[summary] preset %s" % game.tuning.current)
@@ -5745,3 +5745,265 @@ func _shot_full(file: String) -> void:
 		await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png(out_dir.path_join(file))
 	log_line("  screenshot " + file)
+
+
+
+# --- phone level display (run with -- --mobile) ---------------------------------------------
+
+## Pixels that differ between two images of the same size, overall and inside
+## the overlay's cells (cells with a glyph or cover).
+func _img_diff(a: Image, b: Image, ov: AsciiOverlay) -> Vector3i:
+	var n := 0
+	var n_ov := 0
+	var buf := ov.get_buffer() if ov != null else PackedByteArray()
+	for y in a.get_height():
+		for x in a.get_width():
+			if a.get_pixel(x, y) != b.get_pixel(x, y):
+				n += 1
+				if ov != null:
+					var c := Vector2i(x / renderer.pitch.x, y / renderer.pitch.y)
+					if ov.in_grid(c.x, c.y):
+						var i := (c.y * ov.cols * 2 + c.x * 2) * 4
+						if buf[i + 3] > 0 or buf[i + 7] > 0:
+							n_ov += 1
+	return Vector3i(n, n_ov, a.get_width() * a.get_height())
+
+
+## True when a patch of the image holds anything but black (scene cells drawn).
+func _patch_lit(img: Image, r: Rect2i) -> int:
+	var lit := 0
+	for y in range(r.position.y, r.end.y):
+		for x in range(r.position.x, r.end.x):
+			var c := img.get_pixel(x, y)
+			if c.r + c.g + c.b > 0.02:
+				lit += 1
+	return lit
+
+
+## The level display: at roll 0 against level off (pixels), the corners at
+## +-LEVEL_MAX, the clamp beyond it, the overlay / nitro bar / buttons at 0, 15
+## and 30 deg, the pause menu toggle (and that it saves), the reel and level
+## select never turning; screenshots and glyph crops; frame times off and on.
+func _test_mobile_level() -> void:
+	log_line("\n[mobile level] level display (LEVEL_MAX %.0f deg)" % Mobile.level_max_deg())
+	if not Mobile.active() or game.tilt == null:
+		log_line("  skipped: run with -- --mobile")
+		return
+	renderer.fixed_output_size = Vector2i.ZERO
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--mobilewin="):
+			var wh := arg.trim_prefix("--mobilewin=").split("x")
+			get_window().size = Vector2i(wh[0].to_int(), wh[1].to_int())
+			await _frames(30)
+	var tag := "%dx%d_%s_max%d" % [get_window().size.x, get_window().size.y, "gl" if renderer.compat else "fp", roundi(Mobile.level_max_deg())]
+	var tl: TiltInput = game.tilt
+	var au: AudioDirector = game.audio
+	var lmax := deg_to_rad(Mobile.level_max_deg())
+	tl.test_roll_deg = 0.0
+	au.phone_set("level", true)
+	car.player_input = true
+	game.set_chase_view(true)
+	await _place_on_track(30.0, 0.0, 8.0)
+	await _frames(120)
+	# Roll 0: level on against off, world frozen (time scale 0), same frame content.
+	Engine.time_scale = 0.000001 # frozen (0 gives non-finite transforms in the interpolation)
+	await _pframes(10)
+	var ov := renderer.get_overlay()
+	for chase: bool in [true, false]:
+		game.set_chase_view(chase)
+		au.phone_set("level", true)
+		game.update_level()
+		await _pframes(20)
+		var on_img := renderer.get_output_image()
+		var lv := "active %s margin %s world %dx%d cells (visible %dx%d), scene %s" % [renderer.level_active, renderer.level_margin,
+			renderer.world_cols, renderer.world_rows, renderer.cols, renderer.rows, renderer.scene_viewport.size]
+		au.phone_set("level", false)
+		game.update_level()
+		await _pframes(20)
+		var off_img := renderer.get_output_image()
+		var d := _img_diff(on_img, off_img, ov)
+		var line := "%s roll 0, level on vs off: %d of %d pixels differ (%d of them in overlay cells); on: %s" % [
+			"chase" if chase else "iso", d.x, d.z, d.y, lv]
+		log_line("  " + line)
+		_m["level roll0 " + ("chase" if chase else "iso")] = line
+		if d.x > 0:
+			on_img.save_png(out_dir.path_join("%s_roll0_%s_on.png" % [tag, "chase" if chase else "iso"]))
+			off_img.save_png(out_dir.path_join("%s_roll0_%s_off.png" % [tag, "chase" if chase else "iso"]))
+	Engine.time_scale = 1.0
+	au.phone_set("level", true)
+	game.set_chase_view(true)
+	# Corners at +-LEVEL_MAX (analytic: every window corner's world point inside
+	# the world grid less the glyph reach; image: lit pixels in 24 px corner patches).
+	var corner_out := PackedStringArray()
+	for deg: float in [Mobile.level_max_deg(), -Mobile.level_max_deg()]:
+		tl.test_roll_deg = deg
+		await _frames(60)
+		var img := renderer.get_output_image()
+		var w := img.get_width()
+		var h := img.get_height()
+		var inside := true
+		var a := clampf(renderer.level_angle, -lmax, lmax)
+		var ctr := Vector2(renderer.output_size) * 0.5
+		for cp: Vector2 in [Vector2(0, 0), Vector2(w, 0), Vector2(0, h), Vector2(w, h)]:
+			var dd := cp - ctr
+			var q := ctr + Vector2(renderer.level_margin * renderer.pitch) + Vector2(cos(a) * dd.x - sin(a) * dd.y, sin(a) * dd.x + cos(a) * dd.y)
+			var lim := Vector2(renderer.world_size) - Vector2(renderer.pitch)
+			inside = inside and q.x >= float(renderer.pitch.x) and q.y >= float(renderer.pitch.y) and q.x <= lim.x and q.y <= lim.y
+		var lit := PackedStringArray()
+		for r: Rect2i in [Rect2i(0, 0, 24, 24), Rect2i(w - 24, 0, 24, 24), Rect2i(0, h - 24, 24, 24), Rect2i(w - 24, h - 24, 24, 24)]:
+			lit.append(str(_patch_lit(img, r)))
+		corner_out.append("%+.0f deg: angle %.1f deg, corners inside the world grid %s, lit pixels per 24x24 corner (tl tr bl br) %s" % [
+			deg, rad_to_deg(a), inside, "/".join(lit)])
+	tl.test_roll_deg = 40.0
+	await _frames(60)
+	var rot: Vector2 = renderer._level_material.get_shader_parameter("rot")
+	corner_out.append("roll 40 deg: display roll %.1f deg, shown angle %.1f deg (clamped to %.0f)" % [rad_to_deg(tl.display_roll), rad_to_deg(atan2(rot.y, rot.x)), Mobile.level_max_deg()])
+	for c in corner_out:
+		log_line("  " + c)
+	_m["level corners"] = "; ".join(corner_out)
+	# Overlay cells, nitro bar and buttons at 0, 15, 30 deg.
+	var pos_out := PackedStringArray()
+	var bar_ref: Image = null
+	var rects0: Dictionary = game.touch.rects()
+	for deg: float in [0.0, 15.0, 30.0]:
+		tl.test_roll_deg = deg
+		await _frames(60)
+		var img := renderer.get_output_image()
+		# The nitro bar's cells (bottom centre, fully covered): same pixels at every angle.
+		var bw := clampi(roundi(renderer.cols / NitroHud.BAR_COLS_DIV), NitroHud.BAR_WIDTH.x, NitroHud.BAR_WIDTH.y) + NitroHud.LABEL.length() + 4
+		var bx := (renderer.cols - bw) / 2
+		var r := Rect2i(Vector2i(bx * renderer.pitch.x, (renderer.rows - 3) * renderer.pitch.y), Vector2i(bw * renderer.pitch.x, 2 * renderer.pitch.y))
+		r = r.intersection(Rect2i(Vector2i.ZERO, img.get_size()))
+		var bar := img.get_region(r)
+		var same := "reference"
+		if bar_ref == null:
+			bar_ref = bar
+		else:
+			var dd := _img_diff(bar, bar_ref, null)
+			same = "%d of %d bar pixels differ from 0 deg" % [dd.x, dd.z]
+		pos_out.append("%.0f deg: nitro bar cells %s (%s); buttons same rects %s; overlay %dx%d cells" % [
+			deg, r, same, game.touch.rects() == rects0, ov.cols, ov.rows])
+	for c in pos_out:
+		log_line("  " + c)
+	_m["level overlay"] = "; ".join(pos_out)
+	# Screenshots: chase and iso at 0..40 deg, buttons and nitro bar visible.
+	for chase: bool in [true, false]:
+		game.set_chase_view(chase)
+		await _place_on_track(30.0, 0.0, 8.0)
+		for deg: float in [0.0, 10.0, 20.0, 30.0, 40.0]:
+			tl.test_roll_deg = deg
+			await _frames(45)
+			await _shot_full("%s_%s_roll%02d.png" % [tag, "chase" if chase else "iso", roundi(deg)])
+	# Glyph crops (3x, nearest) at 10 and 30 deg from the middle of the picture.
+	game.set_chase_view(true)
+	for deg: float in [10.0, 30.0]:
+		tl.test_roll_deg = deg
+		await _frames(45)
+		var img := renderer.get_output_image()
+		var c := img.get_region(Rect2i(img.get_width() / 2 - 120, img.get_height() / 2 + 20, 240, 120))
+		c.resize(720, 360, Image.INTERPOLATE_NEAREST)
+		c.save_png(out_dir.path_join("%s_crop3x_roll%02d.png" % [tag, roundi(deg)]))
+	# The start lights at 15 deg, the pause menu at 20 deg.
+	tl.test_roll_deg = 15.0
+	game.countdown_enabled = true
+	game.reset_to_grid()
+	await _frames(170)
+	await _shot_full("%s_lights_roll15.png" % tag)
+	while game.race_start.counting:
+		await _frames(10)
+	game.countdown_enabled = false
+	tl.test_roll_deg = 20.0
+	await _frames(60)
+	var pm: PauseMenu = game.pause_menu
+	pm.open(false)
+	await _frames(40)
+	await _shot_full("%s_pause_roll20.png" % tag)
+	# Tap targets: the pitch between rows, in window pixels.
+	var ys: Array[int] = []
+	for h: Array in pm._hits:
+		ys.append((h[0] as Rect2i).position.y)
+	var pitch_px := 0.0
+	if ys.size() > 1:
+		pitch_px = float(ys[1] - ys[0]) * renderer.pitch.y * get_viewport().get_visible_rect().size.y / float(renderer.output_size.y)
+	# The LEVEL DISPLAY row by tap: off, saved; on again.
+	var lvl_px := Vector2.ZERO
+	var cell_w := Vector2(renderer.pitch) * get_viewport().get_visible_rect().size / Vector2(renderer.output_size)
+	for h: Array in pm._hits:
+		if pm.items[h[1]] == PauseMenu.Item.LEVEL:
+			var hr: Rect2i = h[0]
+			lvl_px = Vector2((int(h[2]) + 6) * cell_w.x, (hr.position.y + 0.5) * cell_w.y)
+	_mouse(lvl_px, true)
+	_mouse(lvl_px, false)
+	await _frames(5)
+	var off_state := "level %s, renderer max %.2f, active %s" % [au.phone_get("level", true), renderer.level_max, renderer.level_active]
+	pm.close()
+	await _frames(5)
+	var saved := FileAccess.get_file_as_string(au.settings_path)
+	var saved_off := saved.contains("level=false")
+	pm.open(false)
+	await _frames(40)
+	_mouse(lvl_px, true)
+	_mouse(lvl_px, false)
+	await _frames(5)
+	var on_state := "level %s, active %s" % [au.phone_get("level", true), renderer.level_active]
+	pm.close()
+	await _frames(5)
+	var t_line := "menu: %d items, glyphs %d px open, row pitch %.0f px at %d high; LEVEL tap: %s; saved level=false %s; tap again: %s" % [
+		pm.items.size(), game.default_glyph_px(), pitch_px, get_window().size.y, off_state, saved_off, on_state]
+	log_line("  " + t_line)
+	_m["level menu"] = t_line
+	# Frame time, vsync off: level off, then on.
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	tl.test_roll_deg = 15.0
+	for on: bool in [false, true]:
+		au.phone_set("level", on)
+		game.update_level()
+		await _frames(60)
+		var vps: Array[Viewport] = [get_viewport()]
+		for v in renderer.find_children("*", "SubViewport", true, false):
+			vps.append(v as Viewport)
+		for v in vps:
+			RenderingServer.viewport_set_measure_render_time(v.get_viewport_rid(), true)
+		for chase: bool in [true, false]:
+			game.set_chase_view(chase)
+			await get_tree().create_timer(1.0).timeout
+			var f0 := Engine.get_frames_drawn()
+			var t0 := Time.get_ticks_usec()
+			var gpu := {}
+			while Time.get_ticks_usec() - t0 < 3000000:
+				await get_tree().process_frame
+				for v in vps:
+					if is_instance_valid(v):
+						gpu[String(v.name)] = float(gpu.get(String(v.name), 0.0)) + RenderingServer.viewport_get_measured_render_time_gpu(v.get_viewport_rid())
+			var frames := Engine.get_frames_drawn() - f0
+			var secs := (Time.get_ticks_usec() - t0) / 1e6
+			var parts := PackedStringArray()
+			for k: String in gpu:
+				parts.append("%s %.2f" % [k, gpu[k] / frames])
+			var line := "%s level %s %s: %.0f fps (%.2f ms); GPU ms: %s; scene %s, cells %dx%d" % [tag, "ON" if on else "off",
+				"chase" if chase else "iso", frames / secs, secs * 1000.0 / frames, ", ".join(parts), renderer.scene_viewport.size, renderer.world_cols, renderer.world_rows]
+			log_line("  " + line)
+			_m["level fps %s %s" % ["on" if on else "off", "chase" if chase else "iso"]] = line
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
+	# The reel and the level select never turn.
+	au.phone_set("level", true)
+	tl.test_roll_deg = 20.0
+	car.player_input = false
+	_start_reel()
+	await _frames(240)
+	var reel_state := "reel: level active %s, max %.2f" % [renderer.level_active, renderer.level_max]
+	var win := get_viewport().get_visible_rect().size
+	_mouse(win * 0.5, true)
+	_mouse(win * 0.5, false)
+	await _frames(240)
+	var sel_state := "level select open %s: level active %s" % [game.level_select.active, renderer.level_active]
+	log_line("  %s; %s" % [reel_state, sel_state])
+	_m["level reel"] = "%s; %s" % [reel_state, sel_state]
+	tl.test_roll_deg = NAN
+
+
+
+## Waits n drawn frames (also with Engine.time_scale 0, when physics stops).
+func _pframes(n: int) -> void:
+	for i in n:
+		await get_tree().process_frame

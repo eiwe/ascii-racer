@@ -17,15 +17,15 @@ extends Node
 signal opened
 signal closed
 
-enum Item { RESUME, RESTART, CHANGE_TRACK, START_RACE, OPPONENT, ZOOM, VOLUME, MUSIC, SFX, SOUND_CHECK, TITLE, QUIT, CAMERA, GLYPH, FLIP }
+enum Item { RESUME, RESTART, CHANGE_TRACK, START_RACE, OPPONENT, ZOOM, VOLUME, MUSIC, SFX, SOUND_CHECK, TITLE, QUIT, CAMERA, GLYPH, FLIP, LEVEL }
 const LABELS: Dictionary = {
 	Item.RESUME: "RESUME", Item.RESTART: "RESTART", Item.CHANGE_TRACK: "CHANGE TRACK", Item.START_RACE: "START RACE",
 	Item.OPPONENT: "OPPONENT", Item.ZOOM: "ZOOM", Item.VOLUME: "VOLUME", Item.MUSIC: "MUSIC", Item.SFX: "SFX", Item.SOUND_CHECK: "SOUND CHECK",
 	Item.TITLE: "TO TITLE", Item.QUIT: "QUIT",
-	Item.CAMERA: "CAMERA", Item.GLYPH: "GLYPH SIZE", Item.FLIP: "FLIP STEERING",
+	Item.CAMERA: "CAMERA", Item.GLYPH: "GLYPH SIZE", Item.FLIP: "FLIP STEERING", Item.LEVEL: "LEVEL DISPLAY",
 }
 ## Phone rows (Mobile.active()), after ZOOM. A later row joins this list.
-const PHONE_ITEMS: Array[int] = [Item.CAMERA, Item.GLYPH, Item.FLIP]
+const PHONE_ITEMS: Array[int] = [Item.CAMERA, Item.GLYPH, Item.FLIP, Item.LEVEL]
 ## Phone: rows this many cells apart, and taps ignored this long after opening
 ## (the tap that opened it). While open, the glyphs grow so the menu fills the
 ## height (phone_menu_px): single-cell text at the phone's driving size is too
@@ -254,6 +254,10 @@ func _move(dir: Vector2i) -> void:
 		Item.GLYPH:
 			# Larger glyphs = fewer rows.
 			game.set_phone_rows(game.phone_rows() - dir.x * Mobile.ROWS_STEP)
+		Item.LEVEL:
+			audio.phone_set("level", not bool(audio.phone_get("level", true)))
+			if game.has_method("update_level"):
+				game.update_level()
 		Item.FLIP:
 			audio.phone_set("flip", not bool(audio.phone_get("flip", false)))
 			if game.get("tilt") != null:
@@ -280,7 +284,7 @@ func _choose() -> void:
 			game.attract.start(false)
 		Item.QUIT:
 			audio.quit()
-		Item.OPPONENT, Item.VOLUME, Item.MUSIC, Item.SFX, Item.CAMERA, Item.GLYPH, Item.FLIP:
+		Item.OPPONENT, Item.VOLUME, Item.MUSIC, Item.SFX, Item.CAMERA, Item.GLYPH, Item.FLIP, Item.LEVEL:
 			_move(Vector2i.RIGHT)
 		Item.ZOOM:
 			# Enter cycles, back to AUTO after the farthest step.
@@ -349,9 +353,9 @@ func _draw() -> void:
 			ov.text(lx, y, LABELS[it], ink)
 		var vx := lx + label_w + 4
 		var vy := y
-		_hits.append([Rect2i(x0 - 2, y - (row_h - 1) / 2, w + 4, row_h), i, vx, bar_w])
+		_hits.append([Rect2i(x0 - 2, y, w + 4, row_h), i, vx, bar_w]) # text row y; tap() centres the target on it
 		match it:
-			Item.CAMERA, Item.GLYPH, Item.FLIP:
+			Item.CAMERA, Item.GLYPH, Item.FLIP, Item.LEVEL:
 				var txt := "< %s >" % phone_value(it)
 				if big:
 					_logo.draw_mini(txt, vx, vy, Vector2i.ONE, 0, func(_f: float) -> Color: return ink, 0.0)
@@ -408,7 +412,8 @@ func _draw() -> void:
 ## Phone: the glyph size while the menu is open, so its rows (title, items,
 ## hint) fill about the window height; never smaller than the driving size.
 func phone_menu_px() -> int:
-	var need := 5 + 3 + items.size() * PHONE_ROW_H + 3 + 4
+	# The panel's rows (title 5, gaps, the items, hint) and its two edge rules.
+	var need := 5 + 3 + items.size() * PHONE_ROW_H + 3 + 2
 	var h := renderer.get_viewport().get_visible_rect().size.y
 	return clampi(floori(h / float(need)), renderer.settings.glyph_px, 64)
 
@@ -422,6 +427,8 @@ func phone_value(it: int) -> String:
 			return "%d PX" % game.default_glyph_px()
 		Item.FLIP:
 			return "ON" if bool(audio.phone_get("flip", false)) else "OFF"
+		Item.LEVEL:
+			return "ON" if bool(audio.phone_get("level", true)) else "OFF"
 	return ""
 
 
@@ -433,6 +440,8 @@ func phone_note(it: int) -> String:
 			return "%d rows on the screen" % game.phone_rows()
 		Item.FLIP:
 			return "if tilting right steers left"
+		Item.LEVEL:
+			return "the picture stays level as you tilt"
 	return ""
 
 
@@ -444,9 +453,14 @@ func tap(pos: Vector2, drag: bool) -> void:
 		return
 	var r := renderer
 	var win := r.get_viewport().get_visible_rect().size
-	var cell := Vector2i((pos * Vector2(r.output_size) / win / Vector2(r.pitch)).floor())
+	var cf := pos * Vector2(r.output_size) / win / Vector2(r.pitch)
+	var cell := Vector2i(cf.floor())
 	for h: Array in _hits:
-		if not (h[0] as Rect2i).has_point(cell):
+		# Each row's target is its full pitch, centred on its text: half the gap
+		# above and below belongs to it, so there is no dead space between rows.
+		var hr: Rect2i = h[0]
+		var top := hr.position.y + 0.5 - hr.size.y * 0.5
+		if cf.x < hr.position.x or cf.x >= hr.end.x or cf.y < top or cf.y >= top + hr.size.y:
 			continue
 		var i: int = h[1]
 		var it: int = items[i]
@@ -462,7 +476,7 @@ func tap(pos: Vector2, drag: bool) -> void:
 			return
 		if drag:
 			return
-		var adjustable := it in [Item.OPPONENT, Item.ZOOM, Item.SOUND_CHECK, Item.CAMERA, Item.GLYPH, Item.FLIP]
+		var adjustable := it in [Item.OPPONENT, Item.ZOOM, Item.SOUND_CHECK, Item.CAMERA, Item.GLYPH, Item.FLIP, Item.LEVEL]
 		if adjustable:
 			if cell.x >= vx:
 				var txt_w := ("< %s >" % (phone_value(it) if it in PHONE_ITEMS else "XXXX")).length()

@@ -155,8 +155,7 @@ func _cell_of(p: Vector3) -> Vector2:
 	var cam := renderer.scene_viewport.get_camera_3d()
 	if cam == null or cam.is_position_behind(p):
 		return Vector2(-1.0, -1.0)
-	var uv := cam.unproject_position(p) / Vector2(renderer.scene_viewport.size)
-	return uv * Vector2(renderer.output_size) / Vector2(renderer.pitch)
+	return renderer.scene_point_to_cell(cam.unproject_position(p))
 
 
 ## A flame of glyphs from the back of the car, away from its nose on screen:

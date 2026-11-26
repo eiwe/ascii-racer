@@ -27,6 +27,7 @@ const GBUFFER_SHADER_PATH: String = "res://ascii/shaders/gbuffer.gdshader"
 const GBUFFER_TWIN_SHADER: Shader = preload("res://ascii/shaders/gbuffer_twin.gdshader")
 const CELLS_SHADER: Shader = preload("res://ascii/shaders/cells.gdshader")
 const COMPOSE_SHADER: Shader = preload("res://ascii/shaders/compose.gdshader")
+const COMPOSE_LEVEL_SHADER: Shader = preload("res://ascii/shaders/compose_level.gdshader")
 
 @export var settings: AsciiSettings
 ## Output resolution; (0, 0) = follow the window.
@@ -89,6 +90,35 @@ var sky_ramp_only: bool = false:
 
 ## Whether the overlay cell layer (get_overlay()) is drawn.
 var overlay_enabled: bool = false
+
+## Level display (the phone): the world is drawn on an over-sized grid that
+## covers the window turned by up to `level_max` (radians), and shown turned
+## by `level_angle` (clamped to +-level_max) about the window centre, so the
+## world stays level while the phone rolls; the overlay cells stay aligned
+## with the window. The cameras' fov / size are widened for the extra cells
+## between the game's code and the draw, and put back after it, so the
+## visible window frames exactly what it does with the level display off.
+## 0 (the default): off, the normal path, no extra cells.
+var level_max: float = 0.0:
+	set(v):
+		if v != level_max:
+			level_max = v
+			if is_node_ready():
+				_relayout()
+var level_angle: float = 0.0
+## True while the level display is drawn (level_max > 0, not raw view, atlas built).
+var level_active: bool = false
+## Margin of the over-sized world grid on each side, in cells, and its size in
+## output pixels (output_size when the level display is off).
+var level_margin: Vector2i = Vector2i.ZERO
+var world_size: Vector2i = Vector2i.ONE
+var world_cols: int = 0
+var world_rows: int = 0
+var _level_material: ShaderMaterial
+var _visible_scene: Vector2i = Vector2i.ONE
+var _level_cam: Camera3D
+var _level_base: float = 0.0
+var _level_written: float = 0.0
 
 var raw_view: bool = false:
 	set(v):
@@ -160,6 +190,7 @@ func get_overlay() -> AsciiOverlay:
 		_overlay.atlas = atlas
 		_overlay.resize(cols, rows)
 		_cells_material.set_shader_parameter("overlay_tex", _overlay.texture)
+		_level_material.set_shader_parameter("overlay_tex", _overlay.texture)
 	overlay_enabled = true
 	return _overlay
 
@@ -286,6 +317,8 @@ func snap_step(cam: Camera3D) -> Vector2:
 		return Vector2.ZERO
 	var scene := Vector2(scene_viewport.size)
 	var out := Vector2(output_size)
+	if level_active:
+		scene = Vector2(_visible_scene) # the game's camera frames the visible window
 	var extent := Vector2(cam.size * scene.x / scene.y, cam.size) # visible world size
 	if cam.keep_aspect == Camera3D.KEEP_WIDTH:
 		extent = Vector2(cam.size, cam.size * scene.y / scene.x)
@@ -304,6 +337,24 @@ func snap_step(cam: Camera3D) -> Vector2:
 				k = n
 		step[a] = k * float(pitch[a]) / out[a] * extent[a]
 	return step
+
+
+## The overlay cell under a point of the scene viewport (Camera3D.unproject_position
+## during the game's _process, when the cameras hold the game's own fov / size):
+## with the level display on, through the over-sized grid and its turn.
+func scene_point_to_cell(pt: Vector2) -> Vector2:
+	if not level_active:
+		var uv := pt / Vector2(scene_viewport.size)
+		return uv * Vector2(output_size) / Vector2(pitch)
+	var sw := Vector2(scene_viewport.size)
+	var k := sw.y / float(_visible_scene.y)
+	var w := (sw * 0.5 + (pt - sw * 0.5) / k) * Vector2(world_size) / sw # world output px
+	var d := w - Vector2(world_size) * 0.5
+	var a := clampf(level_angle, -level_max, level_max)
+	var c := cos(a)
+	var sn := sin(a)
+	var v := Vector2(output_size) * 0.5 + Vector2(c * d.x + sn * d.y, -sn * d.x + c * d.y)
+	return v / Vector2(pitch)
 
 
 ## `pos` with its components along the camera's right and up axes rounded to
@@ -399,6 +450,9 @@ func _build_pipeline() -> void:
 	_compose_material = ShaderMaterial.new()
 	_compose_material.shader = COMPOSE_SHADER
 	_compose_material.set_shader_parameter("cell_tex", cell_viewport.get_texture())
+	_level_material = ShaderMaterial.new()
+	_level_material.shader = COMPOSE_LEVEL_SHADER
+	_level_material.set_shader_parameter("cell_tex", cell_viewport.get_texture())
 	_compose_rect = ColorRect.new()
 	_compose_rect.material = _compose_material
 	output_viewport.add_child(_compose_rect)
@@ -423,6 +477,7 @@ func _build_pipeline() -> void:
 	atlas.name = "GlyphAtlas"
 	add_child(atlas, false, INTERNAL_MODE_BACK)
 	atlas.built.connect(_on_atlas_built)
+	RenderingServer.frame_post_draw.connect(_level_restore_camera)
 
 
 func _font() -> Font:
@@ -446,6 +501,9 @@ func _on_atlas_built() -> void:
 	_cells_material.set_shader_parameter("glyph_data", atlas.data_texture)
 	_compose_material.set_shader_parameter("atlas_tex", atlas.texture)
 	_compose_material.set_shader_parameter("atlas_cols", atlas.atlas_cols)
+	_level_material.set_shader_parameter("atlas_tex", atlas.texture)
+	_level_material.set_shader_parameter("atlas_cols", atlas.atlas_cols)
+	_level_material.set_shader_parameter("atlas_size", Vector2(atlas.texture.get_size()))
 	_apply_glyph_tables()
 	_relayout()
 	atlas_ready.emit()
@@ -483,6 +541,13 @@ func _relayout() -> void:
 	else:
 		output_size = Vector2i(get_viewport().get_visible_rect().size)
 	output_size = output_size.max(Vector2i.ONE)
+	level_active = level_max > 0.0 and not raw_view and atlas.ready_to_use
+	if level_active:
+		_relayout_level()
+		return
+	_compose_rect.material = _compose_material
+	world_size = output_size
+	level_margin = Vector2i.ZERO
 
 	var scale := 1.0 if raw_view else settings.scene_scale
 	var scene_size := Vector2i((Vector2(output_size) * scale).round()).max(Vector2i.ONE)
@@ -530,7 +595,103 @@ func _relayout() -> void:
 	c.set_shader_parameter("pitch", pitch)
 	c.set_shader_parameter("box", glyph_box)
 	c.set_shader_parameter("out_size", Vector2(output_size))
+	world_cols = cols
+	world_rows = rows
 	grid_changed.emit()
+
+
+## _relayout() with the level display on: the visible grid (cols x rows, the
+## overlay's) plus `level_margin` cells on each side for the world, enough to
+## cover the window turned by level_max; margins are whole cells and whole
+## scene pixels, so at angle 0 every world cell lands on its visible cell.
+func _relayout_level() -> void:
+	glyph_box = atlas.box
+	pitch = Vector2i(
+		maxi(1, roundi(glyph_box.x * settings.squeeze_x)),
+		maxi(1, roundi(glyph_box.y * settings.squeeze_y)))
+	cols = ceili(float(output_size.x) / pitch.x)
+	rows = ceili(float(output_size.y) / pitch.y)
+	var o := Vector2(output_size)
+	var need := Vector2(o.x * cos(level_max) + o.y * sin(level_max), o.x * sin(level_max) + o.y * cos(level_max))
+	var scale := settings.scene_scale
+	var m := Vector2i.ZERO
+	for a in 2:
+		# Cover the turned window, plus the glyph boxes that reach in from outside.
+		m[a] = ceili((need[a] - o[a]) * 0.5 / pitch[a]) + 2
+		while absf(m[a] * pitch[a] * scale - roundf(m[a] * pitch[a] * scale)) > 1e-4:
+			m[a] += 1
+	level_margin = m
+	world_size = output_size + 2 * m * pitch
+	world_cols = cols + 2 * m.x
+	world_rows = rows + 2 * m.y
+	_visible_scene = Vector2i((o * scale).round()).max(Vector2i.ONE)
+	var scene_size := _visible_scene + Vector2i((Vector2(2 * m * pitch) * scale).round())
+	scene_viewport.size = scene_size
+	gbuffer_viewport.size = scene_size
+	if light_viewport != null:
+		light_viewport.size = scene_size
+	output_viewport.size = output_size
+	_compose_rect.size = Vector2(output_size)
+	_compose_rect.material = _level_material
+	_display.texture = output_viewport.get_texture()
+	cell_viewport.size = Vector2i(world_cols * SLOTS, world_rows)
+	if _overlay != null:
+		_overlay.resize(cols, rows)
+		_overlay.clear()
+		_cells_material.set_shader_parameter("overlay_tex", _overlay.texture)
+		_level_material.set_shader_parameter("overlay_tex", _overlay.texture)
+	_cells_rect.size = Vector2(cell_viewport.size)
+	var cm := _cells_material
+	cm.set_shader_parameter("grid", Vector2i(world_cols, world_rows))
+	cm.set_shader_parameter("pitch_uv", Vector2(pitch) / Vector2(world_size))
+	cm.set_shader_parameter("exposure", settings.exposure)
+	cm.set_shader_parameter("contrast", settings.contrast)
+	cm.set_shader_parameter("gamma", settings.gamma)
+	cm.set_shader_parameter("color_mode", int(settings.color_mode))
+	var mc := settings.mono_color
+	cm.set_shader_parameter("mono_ink", Vector3(mc.r, mc.g, mc.b))
+	cm.set_shader_parameter("color_boost", settings.color_boost)
+	cm.set_shader_parameter("bg_strength", settings.bg_strength)
+	cm.set_shader_parameter("shape_contrast", settings.shape_contrast)
+	cm.set_shader_parameter("shape_flat_threshold", settings.shape_flat_threshold)
+	cm.set_shader_parameter("shape_ink_penalty", settings.shape_ink_penalty)
+	cm.set_shader_parameter("shape_ramp_bias", settings.shape_ramp_bias)
+	var lm := _level_material
+	lm.set_shader_parameter("grid", Vector2i(cols, rows))
+	lm.set_shader_parameter("wgrid", Vector2i(world_cols, world_rows))
+	lm.set_shader_parameter("margin", m)
+	lm.set_shader_parameter("pitch", pitch)
+	lm.set_shader_parameter("box", glyph_box)
+	lm.set_shader_parameter("out_size", Vector2(output_size))
+	grid_changed.emit()
+
+
+## Widens the current camera for the over-sized world (after the game's code
+## has set it this frame); _level_restore_camera() puts the game's value back
+## after the draw.
+func _level_widen_camera(cam: Camera3D) -> void:
+	var k := float(scene_viewport.size.y) / float(_visible_scene.y)
+	_level_cam = cam
+	if cam.projection == Camera3D.PROJECTION_ORTHOGONAL:
+		_level_base = cam.size
+		cam.size = _level_base * k
+		_level_written = cam.size
+	else:
+		_level_base = cam.fov
+		cam.fov = rad_to_deg(2.0 * atan(tan(deg_to_rad(_level_base) * 0.5) * k))
+		_level_written = cam.fov
+
+
+func _level_restore_camera() -> void:
+	if _level_cam == null:
+		return
+	if is_instance_valid(_level_cam):
+		if _level_cam.projection == Camera3D.PROJECTION_ORTHOGONAL:
+			if _level_cam.size == _level_written:
+				_level_cam.size = _level_base
+		elif _level_cam.fov == _level_written:
+			_level_cam.fov = _level_base
+	_level_cam = null
 
 
 func _process(_delta: float) -> void:
@@ -538,6 +699,10 @@ func _process(_delta: float) -> void:
 	if cam == null:
 		return
 	cam.cull_mask &= ~(GBUFFER_LAYER | LIGHT_LAYER)
+	if level_active:
+		_level_widen_camera(cam)
+		var a := clampf(level_angle, -level_max, level_max)
+		_level_material.set_shader_parameter("rot", Vector2(cos(a), sin(a)))
 	var g := _gbuffer_camera
 	g.global_transform = cam.global_transform
 	g.projection = cam.projection
@@ -567,7 +732,7 @@ func _process(_delta: float) -> void:
 		# moves by whole cells and the hatching moves with the ground.
 		var origin := Vector2i.ZERO
 		if cam.projection == Camera3D.PROJECTION_ORTHOGONAL:
-			var c := cam.unproject_position(Vector3.ZERO) / Vector2(scene_viewport.size) * Vector2(output_size) / Vector2(pitch)
+			var c := cam.unproject_position(Vector3.ZERO) / Vector2(scene_viewport.size) * Vector2(world_size) / Vector2(pitch)
 			origin = Vector2i(floori(c.x + 0.5), floori(c.y + 0.5))
 		_cells_material.set_shader_parameter("hatch_origin", origin)
 
@@ -587,6 +752,7 @@ func _process(_delta: float) -> void:
 	_cells_material.set_shader_parameter("fade_begin", fade.x)
 	_cells_material.set_shader_parameter("fade_end", fade.y)
 	var ov := overlay_enabled and _overlay != null and not raw_view
-	_cells_material.set_shader_parameter("overlay_on", ov)
+	_cells_material.set_shader_parameter("overlay_on", ov and not level_active)
+	_level_material.set_shader_parameter("overlay_on", ov)
 	if ov:
 		_overlay.commit()

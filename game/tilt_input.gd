@@ -26,6 +26,11 @@ const FILTER_RATE: float = 18.0
 ## a phone lying flat has none there.
 const UPRIGHT_FADE: Vector2 = Vector2(1.0, 3.5)
 const SIM_RANGE_DEG: float = 40.0
+## Low-pass rate (1/s) of the display roll's gravity vector. A hand trajectory
+## (0 to 25 deg in 0.25 s, a 2 Hz +-10 deg slalom, 0.2 deg rms sensor noise at
+## 100 Hz, 40 ms display latency) gave the lowest moving horizon error with
+## stationary jitter under 0.15 deg rms at 75/s without a prediction lead.
+const DISPLAY_RATE: float = 75.0
 const PAD_DEADZONE: float = 0.15
 
 var car: Car
@@ -38,12 +43,17 @@ var flip: bool = false
 var roll: float = 0.0
 ## The shaped steering, -1..1 (what the wheel follows).
 var steer: float = 0.0
+## The roll for the level display (radians, positive = right side down, after
+## `flip`): its own faster low-pass (DISPLAY_RATE, chosen by simulation; the
+## accelerometer fallback keeps FILTER_RATE), no dead zone, the same flat-phone fade.
+var display_roll: float = 0.0
 ## Where the roll came from: "sensor", "accelerometer", "none", "pad", "pointer", "test".
 var source: String = ""
 ## Tests: a roll in degrees to feed instead of the sensor or pointer (NAN = off).
 var test_roll_deg: float = NAN
 
 var _g := Vector3(0.0, -9.8, 0.0)
+var _gd := Vector3(0.0, -9.8, 0.0)
 var _holding: bool = false
 
 
@@ -58,6 +68,10 @@ func _physics_process(delta: float) -> void:
 	var r := atan2(_g.x, -_g.y) * smoothstep(UPRIGHT_FADE.x, UPRIGHT_FADE.y, upright)
 	roll = -r if flip else r
 	steer = shape(roll)
+	var rate := FILTER_RATE if source == "accelerometer" else DISPLAY_RATE
+	_gd = _gd.lerp(raw, 1.0 - exp(-rate * delta))
+	var rd := atan2(_gd.x, -_gd.y) * smoothstep(UPRIGHT_FADE.x, UPRIGHT_FADE.y, Vector2(_gd.x, _gd.y).length())
+	display_roll = -rd if flip else rd
 	_apply()
 
 

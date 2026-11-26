@@ -14,6 +14,16 @@ const MIN_ROWS: int = 30
 const MAX_ROWS: int = 96
 ## UI scale (HUD and panel text, buttons): 1.0 at this window height.
 const UI_REF_HEIGHT: float = 420.0
+## Level display: the largest turn of the picture (degrees); beyond it the
+## picture turns with the phone. `-- --levelmax=<deg>` overrides it (tests).
+const LEVEL_MAX_DEG: float = 30.0
+
+
+static func level_max_deg() -> float:
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--levelmax="):
+			return arg.trim_prefix("--levelmax=").to_float()
+	return LEVEL_MAX_DEG
 
 static var _active: int = -1
 

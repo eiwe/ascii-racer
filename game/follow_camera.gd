@@ -176,6 +176,8 @@ func narrowness() -> float:
 	if zoom_choice != 0:
 		return 0.0
 	var vs := get_viewport().get_visible_rect().size if is_inside_tree() else Vector2.ZERO
+	if renderer != null and renderer.level_active:
+		vs = Vector2(renderer.output_size) # the window, not the level display's over-sized grid
 	if vs.y <= 0.0:
 		return 0.0
 	return clampf((AUTO_WIDE_ASPECT - vs.x / vs.y) / (AUTO_WIDE_ASPECT - AUTO_REF_ASPECT), 0.0, AUTO_NARROW_MAX)

@@ -582,6 +582,7 @@ func _process(delta: float) -> void:
 		_check_display(delta)
 	if tilt != null:
 		tilt.enabled = car.player_input and not race_start.counting
+		update_level()
 	nitro_hud.race_text = opponent.status_text() if opponent != null and not race_start.counting else ""
 	camera.zoom_choice = audio.zoom_setting
 	# The camera shortcut joins the corner legend (once the start's camera tip,
@@ -687,6 +688,16 @@ func _setup_mobile() -> void:
 	touch.game = self
 	touch.car = car
 	add_child(touch)
+
+
+## Phone: the level display (pause menu LEVEL DISPLAY, saved, on by default)
+## while a race is on screen; off in the reel and the level select.
+func update_level() -> void:
+	if tilt == null:
+		return
+	var on := bool(audio.phone_get("level", true)) and in_race()
+	renderer.level_max = deg_to_rad(Mobile.level_max_deg()) if on else 0.0
+	renderer.level_angle = tilt.display_roll if on else 0.0
 
 
 ## The phone's glyph size setting: text rows on the window height.

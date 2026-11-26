@@ -62,7 +62,7 @@ It runs from any static web host without special headers (it is the single-threa
 - **The picture is close but not identical.** The Compatibility renderer lights scenes differently (it adds shadowed lights in sRGB space, uses simpler diffuse shading and its own light falloff), so the lighting modes are rebalanced for it. Classic and the isometric views match closely; night and the chase view's far distance differ most. The normal and depth information the character shapes come from is drawn a different way, with the same result.
 - **Sound, keyboard and gamepad work** in Chrome and in a Firefox-based browser (tested by the owner). Gamepad rumble in the browser has not been checked.
 - **A start screen first.** Browsers keep a page silent until it is clicked or a key is pressed, so the web build opens on the logo with "click or press any key"; that click or key switches the sound on and starts the demo reel and its music from the top (it does not start a race). A gamepad button cannot switch sound on in a browser, so the screen asks for a click or key. If the browser already allows sound, the screen is skipped.
-- **High-density displays**: characters are a little larger than on the desktop builds and sized for the display's pixel density (12 px on a 1x display, 16 px on a 2x display such as a Retina Mac, in between for 1.25x and 1.5x), and so is the HUD text; this follows browser zoom and moves between monitors.
+- **High-density displays**: characters are a little larger than on the desktop builds and sized for the display's pixel density (12 px on a 1x display, 22 px on a 2x display such as a Retina Mac, in between for 1.25x and 1.5x, 33 px at 3x), and so is the HUD text; on a dense screen that reports 1x (a 4K monitor at 100 %) they are at least 1/120 of the screen height (18 px on 4K). This follows browser zoom and moves between monitors.
 - **Settings are kept in the browser**: the volumes, mute, selected circuit with its time of day, opponent level and best lap, zoom, glyph size and the saved `custom` handling are stored by the game in the browser's site storage (IndexedDB) and, as a backup that is written the moment you save, in its localStorage. Clearing the site's data resets them.
 - **No glint on the car**: the lighting modes with the car glint (sunset, glint, morning, noon) draw the car without it in the browser. With it, WebGL turned the teal car lime.
 - **Night looks a little different** (the headlight pool and the kerbs inside it); it is fully playable. (Up to 0.4.1 night was drawn with fill characters only in the browser: the shadowed headlights emptied the normal and depth information the character shapes come from. Fixed: no light reaches the g-buffer twins.)
@@ -198,7 +198,22 @@ The glyph atlas is built at runtime from the font, so glyph size can change live
 
 **Choosing the glyph.** Each cell takes six brightness samples in a 2 × 3 grid and picks the glyph whose shape vector is nearest, so the character follows the structure inside the cell: a diagonal edge becomes `/`, a bright lower half becomes `_`. Cells with no structure fall back to a brightness ramp sorted by ink coverage. Earlier versions offered four other methods (plain ramp, edge lines, overstrike, hatch by surface direction); they were removed in 0.3 in favour of this one.
 
-All settings are on the `AsciiSettings` resource (`ascii/ascii_settings.gd`). The defaults are 9 px glyphs, squeeze 0.8 × 0.8, full colour and background tint 0.3. On a Retina Mac the game starts at 20 px glyphs instead, because 9 px is too small to read at that pixel density.
+All settings are on the `AsciiSettings` resource (`ascii/ascii_settings.gd`). The defaults are 9 px glyphs, squeeze 0.8 × 0.8, full colour and background tint 0.3.
+
+**Default glyph size.** 9 px glyphs are too small to read as characters on a dense screen, so the game starts at a size for the display (`Game.glyph_default_for`). Two things decide it:
+
+- **The display scale** (`AsciiControls.display_scale()`): the device pixel ratio in a browser, the Retina scale on macOS, Windows' scaling setting, the output scale on Wayland; 1 on X11 and anything under 1.2. The desktop default is 9 px at 1x and 20 px at 2x, the web's 12 and 22, interpolated between and in proportion above.
+- **A row limit** that does not depend on the reported scale: the default never puts more than 160 text rows (web: 120) on the screen's full height in device pixels. This covers dense screens that report 1x, such as a 4K monitor at 100 % (14 px on the desktop, 18 px on the web).
+
+| Display | Desktop | Web |
+|---|---|---|
+| 1080p or 1440p, 1x | 9 px | 12 px |
+| 1080p laptop at 125 % / 150 % | 12 / 15 px | 15 / 17 px |
+| 4K at 100 % / 150 % / 200 % | 14 / 15 / 20 px | 18 / 18 / 22 px |
+| Retina MacBook (2x) | 20 px | 22 px |
+| 3x screen | 30 px | 33 px |
+
+The debug HUD (`H`) shows the size in a display-independent form for comparing screens: `glyph 22 px (11.0 logical, 89 rows/screen)`, where logical is px over the display scale and rows/screen is the screen height in device pixels over px. `-` and `=` change it; the choice is saved and kept the same physical size on another display, and stepping back to the default forgets it, so the default can follow the display again. The drive test's `glyph_table` scenario prints the default for a list of displays. Scripted runs keep 9 px (20 px at 2x) so their output stays comparable.
 
 ### Lighting modes
 
@@ -331,7 +346,7 @@ The web build runs on the Compatibility renderer (`rendering/renderer/rendering_
 - **Some sounds come from lossy previews.** The engine's idle and mid-rev loops, the landing thump and the kerb knock were cut from Freesound's public preview files, because the originals need a login. There is no recording above about 2,600 rpm, so the top of the rev range is that loop pitched up. `assets/audio/CREDITS.md` marks which files these are.
 - **The `heavy` preset bottoms out on the jump landing.**
 - **The opponent is a rival on the road, not yet a race.** There is a start, but no lap count, finish or results, and no jump-start penalty (the car is simply held until lights out): both cars lap freely after the lights. Its engine is quieter and fades with distance but is not panned left or right, and only its engine is heard (no tyre or nitro sounds of its own).
-- **The Retina default is new in 0.2.** On a Retina Mac the game now starts with larger glyphs and HUD text. If the characters still look too small or too large, adjust them with `-` and `=`.
+- **The display-dependent default is new in 0.5** (Retina Mac since 0.2). The display scale is read on Windows and Wayland now too, which also scales the HUD and tuning panel text there; on X11 only the row limit applies. If the characters look too small or too large, adjust them with `-` and `=`.
 - **The Windows build has only been run under Wine**, not on a Windows PC.
 - **The web build is experimental.** It looks close to the desktop builds but not the same (see [Web build](#web-build)); rumble in the browser is untested.
 - **Glyph flicker.** As the camera moves, glyphs change. Grid snapping (`G`) reduces this for the static world in the isometric view but does not remove it, and it does not apply to the chase view. In the sunset mode it helps less when the isometric view is zoomed out (AUTO in a 16:9 window, or the menu's steps above 1.00): the grid-snap measurement goes from about 1% of cells changing at the base zoom to about 3% under AUTO at 16:9. The other modes are not affected.

@@ -169,7 +169,7 @@ func _run() -> void:
 		if arg.begins_with("--dtonly="):
 			only = arg.trim_prefix("--dtonly=")
 	for t: String in ["spawn", "accel_brake", "corners", "limit", "nitro", "nitro_shots", "turns", "handbrake", "drift", "feel", "offroad", "kerbs", "tree", "cones", "jump", "bridge", "reset_bridge", "keys",
-			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting", "level_select", "tracks", "camera_blend", "time_of_day", "dirt_feel", "dust_tour", "abuse", "opp_trace", "bank_iso", "key_steer"]:
+			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting", "level_select", "tracks", "camera_blend", "time_of_day", "dirt_feel", "dust_tour", "abuse", "opp_trace", "bank_iso", "key_steer", "glyph_table"]:
 		if only == "" or t in only.split(","):
 			await call("_test_" + t)
 	log_line("\n[summary] preset %s" % game.tuning.current)
@@ -5351,3 +5351,37 @@ func _ks_tap(ms: int, v: float, dir: Vector3) -> Dictionary:
 	var side := dir.cross(Vector3.UP)
 	r.side = absf((car.global_position - p0).dot(side))
 	return r
+
+
+
+## The default glyph size (Game.glyph_default_for) on a set of displays, desktop
+## and web: px, logical px (px over the scale) and text rows on the screen height.
+func _test_glyph_table() -> void:
+	log_line("\n[glyph table] default glyph size: px (logical px, rows on the screen height)")
+	var here_scale := AsciiControls.display_scale()
+	var here_h := DisplayServer.screen_get_size().y
+	log_line("  this machine reports: driver %s, screen %s, screen_get_scale %.3f, dpi %d, reported %.3f, display_scale %.2f" % [
+		DisplayServer.get_name(), DisplayServer.screen_get_size(), DisplayServer.screen_get_scale(), DisplayServer.screen_get_dpi(),
+		AsciiControls.reported_scale(), here_scale])
+	var rows := [
+		["this machine as reported", here_scale, here_h],
+		["owner's monitor 3440x1440, 1x", 1.0, 1440],
+		["1080p, 1x", 1.0, 1080],
+		["1080p laptop, 125 %", 1.25, 1080],
+		["1080p laptop, 150 %", 1.5, 1080],
+		["1440p, 1x", 1.0, 1440],
+		["4K, 1x", 1.0, 2160],
+		["4K, 150 %", 1.5, 2160],
+		["4K, 200 %", 2.0, 2160],
+		["Retina MacBook 3024x1964, 2x", 2.0, 1964],
+		["3x screen (2556 high)", 3.0, 2556],
+	]
+	for r: Array in rows:
+		var sc: float = r[1]
+		var h: int = r[2]
+		var cells := PackedStringArray()
+		for web: bool in [false, true]:
+			var px: int = game.glyph_default_for(web, sc, h)
+			cells.append("%s %2d px (%4.1f, %3d rows)" % ["web" if web else "desktop", px, px / sc, roundi(float(h) / px)])
+		log_line("  %-32s %s" % [r[0], "   ".join(cells)])
+		_m["glyph table " + String(r[0])] = "   ".join(cells)

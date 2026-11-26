@@ -74,6 +74,9 @@ var web_start: WebStart
 var level_select: LevelSelect
 ## The eased move between the iso and chase views (see ViewBlend).
 var view_blend: ViewBlend
+## Phone only (Mobile.active()): tilt steering and the touch buttons.
+var tilt: TiltInput
+var touch: TouchControls
 
 var _safe_pose: Transform3D
 var _safe_timer: float = 0.0
@@ -158,8 +161,11 @@ func _ready() -> void:
 	add_child(audio)
 	# A glyph size the player chose (saved with the settings) replaces the
 	# platform default; scripted runs keep the default so their output does not
-	# depend on the settings file.
-	if not _scripted and audio.glyph_px > 0:
+	# depend on the settings file. (The phone has its own size: rows.)
+	if Mobile.active():
+		_display_default = default_glyph_px()
+		renderer.settings.glyph_px = _display_default
+	elif not _scripted and audio.glyph_px > 0:
 		renderer.settings.glyph_px = chosen_glyph_px()
 	controls.glyph_size_changed.connect(_on_glyph_size_changed)
 	car_audio = CarAudio.new()
@@ -194,6 +200,9 @@ func _ready() -> void:
 	nitro_hud.car = car
 	nitro_hud.renderer = renderer
 	add_child(nitro_hud)
+
+	if Mobile.active():
+		_setup_mobile()
 
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--preset="):
@@ -231,14 +240,17 @@ func _ready() -> void:
 		set_track(audio.track_id)
 		if not _lighting_arg():
 			apply_time_of_day(tod if tod != "" else audio.track_time(audio.track_id))
-		race_start.tip_pending = true # the camera tip before the first lights
+		race_start.tip_pending = not Mobile.active() # the camera tip before the first lights
 		reset_to_grid() # the start lights
 		update_opponent(true)
+		set_chase_view(start_in_chase())
 	if not scripted and not OS.get_cmdline_user_args().has("--play"):
 		attract = Attract.new()
 		attract.game = self
 		add_child(attract)
 		nitro_hud.attract = attract
+		if Mobile.active():
+			attract.logo.prompt_text = "TAP TO START"
 		if WebStart.needed():
 			# The browser has not allowed sound yet: the first key or click
 			# switches it on and then starts the reel (and its music) from the top.
@@ -364,6 +376,12 @@ func set_chase_view(on: bool) -> void:
 	renderer.distance_fade = CHASE_FADE if on and chase_fade else Vector2.ZERO
 
 
+## The view a race starts in: isometric, or on the phone the chase view unless
+## the player chose the isometric one in the pause menu.
+func start_in_chase() -> bool:
+	return Mobile.active() and audio.phone_get("camera", "chase") != "iso"
+
+
 ## The player's view switch: an eased move (ViewBlend); pressing again mid-move reverses it.
 func blend_view(on: bool) -> void:
 	chase_view = on
@@ -449,6 +467,8 @@ var _display_t: float = 0.0
 ## The default glyph size on this display (glyph_default_for). Scripted runs
 ## keep the fixed sizes their baselines were made with: 9 px, 20 px at scale 2.
 func default_glyph_px() -> int:
+	if Mobile.active():
+		return Mobile.glyph_px(get_viewport().get_visible_rect().size.y, phone_rows())
 	if _scripted:
 		return RETINA_GLYPH_PX if AsciiControls.display_scale() >= 2.0 else AsciiSettings.new().glyph_px
 	return glyph_default_for(OS.has_feature("web"), AsciiControls.display_scale(), DisplayServer.screen_get_size().y)
@@ -493,6 +513,10 @@ static func scripted_run() -> bool:
 ## - / = changed the glyph size: remember it (stepping back to the default
 ## forgets it, so a later change of the default still reaches this player).
 func _on_glyph_size_changed(px: int) -> void:
+	if Mobile.active():
+		# A keyboard on the phone: kept as rows, like the menu's GLYPH SIZE.
+		set_phone_rows(roundi(get_viewport().get_visible_rect().size.y / float(px)))
+		return
 	if px == default_glyph_px():
 		audio.set_glyph_choice(0, 1.0)
 	else:
@@ -510,6 +534,9 @@ func _check_display(delta: float) -> void:
 	if _display_t < 0.5:
 		return
 	_display_t = 0.0
+	if Mobile.active():
+		_check_mobile_display()
+		return
 	var r := AsciiControls.display_scale()
 	var d := default_glyph_px()
 	var rescaled := not is_equal_approx(r, _display_scale)
@@ -551,15 +578,17 @@ func _log_display(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	_log_display(delta)
-	if not _scripted:
+	if not _scripted or Mobile.active():
 		_check_display(delta)
+	if tilt != null:
+		tilt.enabled = car.player_input and not race_start.counting
 	nitro_hud.race_text = opponent.status_text() if opponent != null and not race_start.counting else ""
 	camera.zoom_choice = audio.zoom_setting
 	# The camera shortcut joins the corner legend (once the start's camera tip,
 	# if any, has faded).
 	controls.legend_extra = "" if race_start.tip_showing() else RaceStart.camera_keys() + "  camera"
 	# The debug HUD's legend: not over the reel (logo, prompt) or the menu.
-	controls.legend_allowed = (attract == null or not attract.busy()) and not pause_menu.is_open and web_start == null
+	controls.legend_allowed = (attract == null or not attract.busy()) and not pause_menu.is_open and web_start == null and not Mobile.active()
 	# Music and mix: the menu track leads under the reel, the race track is a
 	# bed under the car in play (the pause menu sets its own context).
 	if web_start != null:
@@ -634,3 +663,87 @@ func _unhandled_input(event: InputEvent) -> void:
 		flash("sound muted" if audio.toggle_mute() else "sound on")
 		audio.save_settings()
 		get_viewport().set_input_as_handled()
+
+
+# --- phone (Mobile.active()) ---------------------------------------------------------
+
+## Phone layout and input: touch (from the mouse with --mobile), tilt, the
+## touch buttons, text sized from the window height, the race standing at the
+## top (the buttons take the bottom corners).
+func _setup_mobile() -> void:
+	if not Mobile.device():
+		Input.emulate_touch_from_mouse = true
+	AsciiControls.ui_scale_override = Mobile.ui_scale(get_viewport().get_visible_rect().size.y)
+	controls.apply_scale()
+	panel.apply_scale()
+	nitro_hud.race_top = true
+	tilt = TiltInput.new()
+	tilt.name = "TiltInput"
+	tilt.car = car
+	tilt.flip = bool(audio.phone_get("flip", false))
+	add_child(tilt)
+	touch = TouchControls.new()
+	touch.name = "TouchControls"
+	touch.game = self
+	touch.car = car
+	add_child(touch)
+
+
+## The phone's glyph size setting: text rows on the window height.
+func phone_rows() -> int:
+	if audio == null:
+		return Mobile.DEFAULT_ROWS # before the settings are loaded (the first frame)
+	return clampi(int(audio.phone_get("rows", Mobile.DEFAULT_ROWS)), Mobile.MIN_ROWS, Mobile.MAX_ROWS)
+
+
+func set_phone_rows(rows: int) -> void:
+	rows = clampi(rows, Mobile.MIN_ROWS, Mobile.MAX_ROWS)
+	audio.phone_set("rows", rows)
+	audio.save_settings()
+	_display_default = default_glyph_px()
+	if not pause_menu.is_open: # the menu sets its own size while open
+		renderer.settings.glyph_px = _display_default
+
+
+## Phone: the window height sets the text scale and the glyph size (rotation,
+## split screen).
+func _check_mobile_display() -> void:
+	var k := Mobile.ui_scale(get_viewport().get_visible_rect().size.y)
+	if not is_equal_approx(k, AsciiControls.ui_scale_override):
+		AsciiControls.ui_scale_override = k
+		controls.apply_scale()
+		panel.apply_scale()
+	var d := default_glyph_px()
+	if d != _display_default:
+		if renderer.settings.glyph_px == _display_default:
+			renderer.settings.glyph_px = d
+		_display_default = d
+
+
+## True while the player is in a race (not the reel, the level select or a wipe).
+func in_race() -> bool:
+	return car.player_input and (attract == null or not attract.busy())
+
+
+## Phone back button (and the pause button): in a race it pauses and resumes,
+## in the level select it goes back to the reel, in a menu it closes it.
+func mobile_back() -> void:
+	if pause_menu.is_open:
+		pause_menu.close()
+	elif level_select != null and level_select.active:
+		level_select.go_back()
+	elif in_race():
+		pause_menu.open(false)
+
+
+func _notification(what: int) -> void:
+	if not Mobile.active():
+		return
+	match what:
+		NOTIFICATION_WM_GO_BACK_REQUEST:
+			mobile_back()
+		NOTIFICATION_APPLICATION_PAUSED, NOTIFICATION_APPLICATION_FOCUS_OUT:
+			# The app went to the background: a race waits in the pause menu.
+			# (Device only: a desktop test window losing focus must not pause.)
+			if Mobile.device() and in_race() and not pause_menu.is_open:
+				pause_menu.open(false)

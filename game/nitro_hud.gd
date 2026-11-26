@@ -45,6 +45,8 @@ var attract: Attract
 var enabled: bool = true
 ## Race standing from the opponent ("P1 +1.8"), drawn bottom left; "" = none.
 var race_text: String = ""
+## Draws the standing top left instead (the phone's buttons take the bottom corners).
+var race_top: bool = false
 const RACE_INK_LEAD: Color = Color("ffe45c")
 const RACE_INK_TRAIL: Color = Color("ff7a5c")
 var _logo := AsciiLogo.new()
@@ -139,6 +141,8 @@ func _draw_race(ov: AsciiOverlay) -> void:
 	var w := AsciiLogo.mini_width(race_text, Vector2i.ONE, 0)
 	var x0 := 3
 	var y0 := ov.rows - 1 - BAR_MARGIN - 5
+	if race_top:
+		y0 = 2
 	for y in range(y0 - 1, y0 + 6):
 		for x in range(x0 - 2, x0 + w + 1):
 			ov.cover(x, y, 0.85, BG)

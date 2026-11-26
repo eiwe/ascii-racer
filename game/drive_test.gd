@@ -169,7 +169,7 @@ func _run() -> void:
 		if arg.begins_with("--dtonly="):
 			only = arg.trim_prefix("--dtonly=")
 	for t: String in ["spawn", "accel_brake", "corners", "limit", "nitro", "nitro_shots", "turns", "handbrake", "drift", "feel", "offroad", "kerbs", "tree", "cones", "jump", "bridge", "reset_bridge", "keys",
-			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting", "level_select", "tracks", "camera_blend", "time_of_day", "dirt_feel", "dust_tour", "abuse", "opp_trace", "bank_iso", "key_steer", "glyph_table"]:
+			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting", "level_select", "tracks", "camera_blend", "time_of_day", "dirt_feel", "dust_tour", "abuse", "opp_trace", "bank_iso", "key_steer", "glyph_table", "mobile", "mobile_shots"]:
 		if only == "" or t in only.split(","):
 			await call("_test_" + t)
 	log_line("\n[summary] preset %s" % game.tuning.current)
@@ -5385,3 +5385,363 @@ func _test_glyph_table() -> void:
 			cells.append("%s %2d px (%4.1f, %3d rows)" % ["web" if web else "desktop", px, px / sc, roundi(float(h) / px)])
 		log_line("  %-32s %s" % [r[0], "   ".join(cells)])
 		_m["glyph table " + String(r[0])] = "   ".join(cells)
+
+
+
+# --- phone (run with -- --mobile) ---------------------------------------------------------
+
+func _touch(index: int, pos: Vector2, pressed: bool) -> void:
+	var e := InputEventScreenTouch.new()
+	e.index = index
+	e.position = pos
+	e.pressed = pressed
+	Input.parse_input_event(e)
+	Input.flush_buffered_events()
+
+
+func _mouse(pos: Vector2, pressed: bool) -> void:
+	var e := InputEventMouseButton.new()
+	e.button_index = MOUSE_BUTTON_LEFT
+	e.position = pos
+	e.global_position = pos
+	e.pressed = pressed
+	e.button_mask = MOUSE_BUTTON_MASK_LEFT if pressed else 0
+	Input.parse_input_event(e)
+	Input.flush_buffered_events()
+
+
+## Window pixel of the centre of an overlay cell rect.
+func _cell_px(r: Rect2i) -> Vector2:
+	var win := renderer.get_viewport().get_visible_rect().size
+	var c := (Vector2(r.position) + Vector2(r.size) * 0.5) * Vector2(renderer.pitch)
+	return c * win / Vector2(renderer.output_size)
+
+
+## Starts the reel as the game does at boot (the drive test runs without it).
+func _start_reel() -> void:
+	var at := Attract.new()
+	at.game = game
+	game.add_child(at)
+	game.attract = at
+	game.nitro_hud.attract = at
+	at.logo.prompt_text = "TAP TO START"
+	at.start(true)
+
+
+## The phone layer with simulated touch and tilt (needs -- --mobile): auto
+## throttle after the lights, BRAKE (slowing, then reversing), NITRO, both held
+## at once on two fingers, tilt through the analogue path (dead zone, shaping,
+## full lock, flip), the pause button and back, escaping a wall nose-first
+## with BRAKE and tilt, and the reel and level select by tap and swipe.
+func _test_mobile() -> void:
+	log_line("\n[mobile] phone layer, touch and simulated tilt")
+	if not Mobile.active() or game.touch == null:
+		log_line("  skipped: run with -- --mobile")
+		return
+	var tc: TouchControls = game.touch
+	var tl: TiltInput = game.tilt
+	var out := PackedStringArray()
+	tl.test_roll_deg = 0.0
+	tl.flip = false
+	# Lights, then the automatic throttle.
+	game.countdown_enabled = true
+	car.player_input = true
+	game.reset_to_grid()
+	var p0 := car.global_position
+	var thr_during := false
+	var n := 0
+	while game.race_start.counting and n < 1200:
+		await _frames(1)
+		thr_during = thr_during or tc.auto_throttle or car.throttle_input > 0.0
+		n += 1
+	var moved_during := car.global_position.distance_to(p0)
+	await _frames(240)
+	var v_after := car.forward_speed
+	out.append("lights out after %.2f s; throttle during the lights %s, moved %.3f u; 2 s later auto throttle %s, %.2f u/s" % [
+		n / 120.0, thr_during, moved_during, tc.auto_throttle, v_after])
+	log_line("  " + out[-1])
+	_m["mobile auto throttle"] = out[-1]
+	var r := tc.rects()
+	# BRAKE: slows, then reverses at a standstill.
+	_touch(0, (r.brake as Rect2).get_center(), true)
+	await _frames(2)
+	var thr_with_brake := car.throttle_input
+	var brake_held := car.brake_input
+	var v0 := car.forward_speed
+	await _frames(60)
+	var v1 := car.forward_speed
+	var t_stop := -1.0
+	for f in 600:
+		await _frames(1)
+		if t_stop < 0.0 and car.forward_speed < 0.05:
+			t_stop = (61 + f) / 120.0
+	var v_rev := car.forward_speed
+	_touch(0, (r.brake as Rect2).get_center(), false)
+	await _frames(2)
+	out.append("BRAKE: brake %.2f, throttle %.2f while held; %.2f -> %.2f u/s in 0.5 s, stopped at %.2f s, after 5.5 s %.2f u/s (reverse)" % [
+		brake_held, thr_with_brake, v0, v1, t_stop, v_rev])
+	log_line("  " + out[-1])
+	_m["mobile brake"] = out[-1]
+	# NITRO, and both held together on two fingers.
+	await _frames(240)
+	var ign := car.nitro_ignitions
+	_touch(1, (r.nitro as Rect2).get_center(), true)
+	await _frames(30)
+	var nitro_on := car.nitro_input and car.nitro_level > 0.0
+	_touch(0, (r.brake as Rect2).get_center(), true)
+	await _frames(3)
+	var both := "brake %.2f nitro %s (fingers %s)" % [car.brake_input, car.nitro_input, tc.fingers]
+	_touch(0, Vector2.ZERO, false)
+	_touch(1, Vector2.ZERO, false)
+	await _frames(3)
+	out.append("NITRO: ignitions %d -> %d, burning %s; with BRAKE on a second finger: %s; released: brake %.2f nitro %s" % [
+		ign, car.nitro_ignitions, nitro_on, both, car.brake_input, car.nitro_input])
+	log_line("  " + out[-1])
+	_m["mobile nitro"] = out[-1]
+	# Tilt: dead zone, shaping, full lock, flip (at a standstill, brake held).
+	car.player_input = true
+	var tilt_out := PackedStringArray()
+	for deg: float in [1.0, 1.4, 2.0, 15.0, -15.0, 30.0, 45.0]:
+		tl.test_roll_deg = deg
+		_touch(0, (r.brake as Rect2).get_center(), true)
+		await _frames(90)
+		tilt_out.append("%+.1f deg: steer %+.3f (expect %+.3f), car input %+.3f %s, wheel %+.3f" % [deg, tl.steer, TiltInput.shape(deg_to_rad(deg)),
+			car.steer_input, "stick" if car.steer_analog else "key", car._steer_state])
+	tl.flip = true
+	tl.test_roll_deg = 15.0
+	await _frames(90)
+	tilt_out.append("flip on, +15 deg: steer %+.3f, wheel %+.3f" % [tl.steer, car._steer_state])
+	tl.flip = false
+	tl.test_roll_deg = 30.0
+	await _frames(90)
+	tilt_out.append("full lock: wheels %.1f deg, lock %.1f deg" % [rad_to_deg(car.steer_angle), rad_to_deg(car.steer_lock)])
+	tl.test_roll_deg = 0.0
+	_touch(0, Vector2.ZERO, false)
+	await _frames(30)
+	for t in tilt_out:
+		log_line("  tilt " + t)
+	_m["mobile tilt"] = "; ".join(tilt_out)
+	# Pause button, back.
+	_touch(2, (r.pause as Rect2).get_center(), true)
+	await _frames(3)
+	var paused1: bool = get_tree().paused and game.pause_menu.is_open
+	_touch(2, (r.pause as Rect2).get_center(), false)
+	game.mobile_back()
+	await _frames(3)
+	var resumed := not get_tree().paused
+	game.mobile_back()
+	await _frames(3)
+	var paused2 := get_tree().paused
+	game.mobile_back()
+	await _frames(3)
+	out.append("pause button: paused %s; back: resumed %s; back in a race: paused %s; back again: resumed %s" % [paused1, resumed, paused2, not get_tree().paused])
+	log_line("  " + out[-1])
+	_m["mobile pause"] = out[-1]
+	# Pause menu by tap: FLIP's value, the volume bar, RESUME.
+	var pm: PauseMenu = game.pause_menu
+	pm.open(false)
+	await _frames(40) # the menu's glyphs (larger on the phone) and a first draw
+	var px_menu := renderer.settings.glyph_px
+	var flip0 := tl.flip
+	var vol0: float = game.audio.master_volume
+	var flip_px := Vector2.ZERO
+	var vol_px := Vector2.ZERO
+	var resume_px := Vector2.ZERO
+	for h: Array in pm._hits:
+		var it: int = pm.items[h[1]]
+		var rr: Rect2i = h[0]
+		var vx: int = h[2]
+		var cell_w := Vector2(renderer.pitch) * get_viewport().get_visible_rect().size / Vector2(renderer.output_size)
+		var y := (rr.position.y + rr.size.y * 0.5) * cell_w.y
+		if it == PauseMenu.Item.FLIP:
+			flip_px = Vector2((vx + 6) * cell_w.x, y) # the right half of "< OFF >"
+		elif it == PauseMenu.Item.VOLUME:
+			vol_px = Vector2((vx + 0.5 + h[3] * 0.5) * cell_w.x, y)
+		elif it == PauseMenu.Item.RESUME:
+			resume_px = Vector2((rr.position.x + 8) * cell_w.x, y)
+	for p: Vector2 in [flip_px, vol_px]:
+		_mouse(p, true)
+		_mouse(p, false)
+		await _frames(3)
+	var flip1 := tl.flip
+	var vol1: float = game.audio.master_volume
+	_mouse(resume_px, true)
+	_mouse(resume_px, false)
+	await _frames(5)
+	out.append("pause menu taps: glyphs %d -> %d px while open; FLIP %s -> %s; volume bar at half: %.2f -> %.2f; RESUME: open %s, glyphs %d px" % [
+		game.default_glyph_px(), px_menu, flip0, flip1, vol0, vol1, pm.is_open, renderer.settings.glyph_px])
+	log_line("  " + out[-1])
+	_m["mobile menu taps"] = out[-1]
+	tl.flip = false
+	game.audio.phone_set("flip", false)
+	# Wall: nose against a block, auto throttle pushing; escape with BRAKE and tilt.
+	var pad: Vector3 = (game.track as Track).bounds.end + Vector3(30.0, 0.0, 30.0)
+	var wall := StaticBody3D.new()
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(1.0, 2.0, 8.0)
+	shape.shape = box
+	wall.add_child(shape)
+	wall.collision_layer = Track.LAYER_PROPS | Track.LAYER_SURFACE
+	world.add_child(wall)
+	wall.global_position = Vector3(pad.x + 3.0, 1.0, pad.z)
+	await _place(Vector3(pad.x, 0.0, pad.z), Vector3(1.0, 0.0, 0.0))
+	tl.test_roll_deg = 0.0
+	await _frames(240) # auto throttle drives it into the wall
+	var stuck := car.global_position
+	var stuck_v := car.forward_speed
+	tl.test_roll_deg = -25.0
+	_touch(0, (r.brake as Rect2).get_center(), true)
+	await _frames(240)
+	var back_d := car.global_position.distance_to(stuck)
+	_touch(0, Vector2.ZERO, false)
+	tl.test_roll_deg = 0.0
+	await _frames(360)
+	var fw := -car.global_basis.z
+	var clear := car.global_position.x > wall.global_position.x + 1.0 or absf(car.global_position.z - pad.z) > 4.5
+	out.append("wall: stuck at %.2f u/s, %.2f u from the wall face; BRAKE + tilt left 2 s: backed %.2f u; then auto throttle 3 s: at x %+.1f z %+.1f from the start, heading %.0f deg, past the wall %s" % [
+		stuck_v, wall.global_position.x - 0.5 - stuck.x, back_d, car.global_position.x - pad.x, car.global_position.z - pad.z,
+		rad_to_deg(atan2(fw.z, fw.x)), clear])
+	log_line("  " + out[-1])
+	_m["mobile wall"] = out[-1]
+	wall.queue_free()
+	# Reel and level select by tap and swipe.
+	car.player_input = false
+	_start_reel()
+	await _frames(240)
+	var win := get_viewport().get_visible_rect().size
+	_mouse(win * 0.5, true)
+	_mouse(win * 0.5, false)
+	await _frames(240)
+	var ls: LevelSelect = game.level_select
+	var sel_open := ls.active
+	var i0 := ls.index
+	_mouse(Vector2(win.x * 0.7, win.y * 0.45), true)
+	_mouse(Vector2(win.x * 0.3, win.y * 0.47), false)
+	await _frames(200)
+	var i_swipe := ls.index
+	var next_px := Vector2.ZERO
+	var time_px := Vector2.ZERO
+	for h: Array in ls._hits:
+		if h[1] == "next":
+			next_px = _cell_px(h[0])
+		elif h[1] == "time":
+			time_px = _cell_px(h[0])
+	_mouse(next_px, true)
+	_mouse(next_px, false)
+	await _frames(200)
+	var i_tap := ls.index
+	var t0: String = game.audio.track_time(ls.track_id())
+	_mouse(time_px, true)
+	_mouse(time_px, false)
+	await _frames(30)
+	var t1: String = game.audio.track_time(ls.track_id())
+	game.mobile_back()
+	await _frames(200)
+	out.append("reel tap: level select open %s; swipe left: circuit %d -> %d; tap > : %d -> %d; tap the time row: %s -> %s; back: select %s, reel %s" % [
+		sel_open, i0, i_swipe, i_swipe, i_tap, t0, t1, ls.active, game.attract.active])
+	log_line("  " + out[-1])
+	_m["mobile menus"] = out[-1]
+	tl.test_roll_deg = NAN
+	game.countdown_enabled = false
+
+
+## Phone screenshots (run with -- --mobile in a 20:9 window): iso and chase at
+## 54, 60 and 66 rows, the reel, level select, grid with lights, driving with
+## the buttons, the pause menu; full window (buttons included), plus the frame
+## time with vsync off.
+func _test_mobile_shots() -> void:
+	renderer.fixed_output_size = Vector2i.ZERO # the window as a phone shows it
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--mobilewin="):
+			var wh := arg.trim_prefix("--mobilewin=").split("x")
+			get_window().size = Vector2i(wh[0].to_int(), wh[1].to_int())
+			await _frames(30)
+	log_line("\n[mobile shots] window %s" % get_viewport().get_visible_rect().size)
+	if not Mobile.active() or game.touch == null:
+		log_line("  skipped: run with -- --mobile")
+		return
+	var tl: TiltInput = game.tilt
+	tl.test_roll_deg = 0.0
+	var tag := "%dx%d_%s" % [get_window().size.x, get_window().size.y, "gl" if renderer.compat else "fp"]
+	var rows0: int = game.phone_rows()
+	for rows: int in [54, 60, 66]:
+		game.set_phone_rows(rows)
+		for chase: bool in [true, false]:
+			await _place_on_track(30.0, 0.0, 8.0)
+			game.set_chase_view(chase)
+			car.player_input = true
+			await _frames(90)
+			await _shot_full("%s_rows%d_%s.png" % [tag, rows, "chase" if chase else "iso"])
+			log_line("    glyph %d px, grid %dx%d" % [renderer.settings.glyph_px, renderer.cols, renderer.rows])
+	game.set_phone_rows(rows0)
+	# Grid with the lights, driving with the buttons, a finger on BRAKE, pause menu.
+	game.countdown_enabled = true
+	game.set_chase_view(true)
+	game.reset_to_grid()
+	await _frames(150)
+	await _shot_full("%s_grid_lights.png" % tag)
+	while game.race_start.counting:
+		await _frames(10)
+	await _frames(300)
+	_touch(1, (game.touch.rects().nitro as Rect2).get_center(), true)
+	await _frames(20)
+	await _shot_full("%s_driving_chase.png" % tag)
+	_touch(1, Vector2.ZERO, false)
+	game.set_chase_view(false)
+	await _frames(60)
+	await _shot_full("%s_driving_iso.png" % tag)
+	game.pause_menu.open(false)
+	await _frames(20)
+	await _shot_full("%s_pause_menu.png" % tag)
+	game.pause_menu.close()
+	game.countdown_enabled = false
+	# Frame time, vsync off: the whole frame, and the GPU time of each viewport.
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	await _frames(60) # the renderer rebuilds its viewports after the menu's glyph change
+	var vps: Array[Viewport] = [get_viewport()]
+	for v in renderer.find_children("*", "SubViewport", true, false):
+		vps.append(v as Viewport)
+	for v in vps:
+		RenderingServer.viewport_set_measure_render_time(v.get_viewport_rid(), true)
+	game.set_chase_view(true)
+	for chase: bool in [true, false]:
+		game.set_chase_view(chase)
+		await get_tree().create_timer(1.0).timeout
+		var f0 := Engine.get_frames_drawn()
+		var t0 := Time.get_ticks_usec()
+		var gpu := {}
+		while Time.get_ticks_usec() - t0 < 3000000:
+			await get_tree().process_frame
+			for v in vps:
+				if not is_instance_valid(v):
+					continue
+				var k := String(v.name)
+				gpu[k] = float(gpu.get(k, 0.0)) + RenderingServer.viewport_get_measured_render_time_gpu(v.get_viewport_rid())
+		var frames := Engine.get_frames_drawn() - f0
+		var secs := (Time.get_ticks_usec() - t0) / 1e6
+		var parts := PackedStringArray()
+		for k: String in gpu:
+			parts.append("%s %.2f ms" % [k, gpu[k] / frames])
+		var line := "%s %s: %.0f fps (%.2f ms/frame); GPU per viewport: %s" % [tag, "chase" if chase else "iso", frames / secs, secs * 1000.0 / frames, ", ".join(parts)]
+		log_line("  " + line)
+		_m["mobile fps %s %s" % [tag, "chase" if chase else "iso"]] = line
+	# The reel and the level select.
+	car.player_input = false
+	_start_reel()
+	await _frames(600)
+	await _shot_full("%s_reel.png" % tag)
+	var win := get_viewport().get_visible_rect().size
+	_mouse(win * 0.5, true)
+	_mouse(win * 0.5, false)
+	await _frames(300)
+	await _shot_full("%s_level_select.png" % tag)
+	tl.test_roll_deg = NAN
+
+
+## The whole window (overlay, HUD and touch buttons), not only the renderer's output.
+func _shot_full(file: String) -> void:
+	for i in 3:
+		await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(out_dir.path_join(file))
+	log_line("  screenshot " + file)

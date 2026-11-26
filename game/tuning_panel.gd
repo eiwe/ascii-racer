@@ -144,6 +144,6 @@ func _text() -> String:
 	return "\n".join(lines)
 
 
-## Sizes the panel text for AsciiControls.display_scale() (again when it changes).
+## Sizes the panel text for AsciiControls.ui_scale() (again when it changes).
 func apply_scale() -> void:
-	_label.add_theme_font_size_override("font_size", roundi(13.0 * AsciiControls.display_scale()))
+	_label.add_theme_font_size_override("font_size", roundi(13.0 * AsciiControls.ui_scale()))

@@ -62,6 +62,17 @@ static func display_scale() -> float:
 	return 1.0 if s < 1.2 else snappedf(s, 0.05)
 
 
+## When above 0, the HUD, legend and tuning panel text use this scale instead
+## of display_scale() (the phone sets it from the window height).
+static var ui_scale_override: float = 0.0
+
+
+## The scale for the HUD, legend and panel text: display_scale(), unless
+## ui_scale_override is set.
+static func ui_scale() -> float:
+	return ui_scale_override if ui_scale_override > 0.0 else display_scale()
+
+
 ## What the platform reports, by the source Godot implements there: the device
 ## pixel ratio in a browser; the backing scale on macOS (1 or 2); Windows'
 ## scaling setting through the effective DPI (96 at 100 %); the output scale on
@@ -125,9 +136,9 @@ func _ready() -> void:
 	apply_scale()
 
 
-## Sizes the HUD and legend text for display_scale() (again when it changes).
+## Sizes the HUD and legend text for ui_scale() (again when it changes).
 func apply_scale() -> void:
-	var k := display_scale()
+	var k := ui_scale()
 	_legend_style.set_content_margin_all(3.0 * k)
 	_legend_style.content_margin_left = 6.0 * k
 	_legend_style.content_margin_right = 6.0 * k

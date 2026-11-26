@@ -46,6 +46,7 @@ Grab a build from the [latest release](../../releases/latest), or **[play in the
 | Linux (x86-64) | `ascii-racer-<version>-linux-x86_64.tar.gz` | Extract and run `./ascii-racer.x86_64`. |
 | macOS (Intel and Apple Silicon) | `ascii-racer-<version>-macos-universal.zip` | Unzip and open `ASCII Racer.app`. Not notarised: see [First launch on macOS](#first-launch-on-macos). |
 | Web browser (experimental) | [eiwe.github.io/ascii-racer](https://eiwe.github.io/ascii-racer/), or `ascii-racer-<version>-web.zip` | Play it online, or unzip and serve the folder from a web server (opening `index.html` from disk does not work); see [Web build](#web-build). |
+| Android phone (arm64, experimental) | `ascii-racer-<version>-android-arm64.apk` | Install it on the phone (sideload); see [Phone (Android)](#phone-android). |
 
 The desktop builds need a GPU with Vulkan (Windows, Linux), Direct3D 12 (Windows) or Metal (macOS). The web build needs a desktop browser with WebGL 2 (current Chrome or Firefox).
 
@@ -89,6 +90,25 @@ The macOS build is not signed with an Apple Developer ID, so macOS blocks it the
   ```
 
 On macOS 14 and earlier you can also right-click the app and choose Open. That shortcut was removed in macOS 15.
+
+### Phone (Android)
+
+The Android build is the same game with a phone layer on top: it runs on the Compatibility renderer like the web build, landscape and full screen, and has not yet been tested on a real phone (everything below was checked on the desktop with `-- --mobile`).
+
+To install it, copy the APK to the phone and open it (Android asks to allow installs from that app once), or from a computer with USB debugging on: `adb install ascii-racer-<version>-android-arm64.apk`. A newer release installs over an older one.
+
+| Action | Phone |
+|---|---|
+| Steer | Tilt the phone like a steering wheel (right side down steers right; full lock at about 30 degrees, a small dead zone around level) |
+| Throttle | Automatic once the lights go out |
+| Brake, reverse | **BRAKE** (bottom left); held at a standstill it reverses, with tilt to steer out of a wall |
+| Nitro | **NITRO** (bottom right) |
+| Pause | **\|\|** (top right) or the back button; back again resumes |
+| Menus | Tap: anywhere on the reel for the level select; the arrows or a sideways swipe change circuit; tap a row's value to change it; tap START |
+
+The pause menu has three phone-only rows: **CAMERA** (the view races start in: chase, the phone's default, or isometric), **GLYPH SIZE** (characters are sized to about 60 rows of text on the screen height; larger or smaller in steps) and **FLIP STEERING** (if tilting right steers left on your phone). They are saved with the other settings (`[phone]` section). A keyboard or gamepad connected to the phone works as on the desktop; a moved stick takes over from tilt. While the menu is open its text is drawn larger so it can be read and tapped.
+
+`-- --mobile` runs the phone layer on the desktop: the mouse stands in for touch, the pointer's left-right position (or the left stick) for the tilt, and text and glyphs are sized from the window height. Add `--rendering-method gl_compatibility` for the phone's renderer.
 
 ## Controls
 
@@ -181,6 +201,7 @@ Useful options, passed after `--`:
 | `godot --path . -- --lighting=low-sun` | Start in a lighting mode (name or number 1–9; overrides the time of day). |
 | `godot --path . -- --preset=drift` | Start on a handling preset (`balanced`, `drift`, `grip`, `heavy`). |
 | `godot --path . -- --tune=top_speed=9,grip_road=1.4` | Override car tunables for one run. |
+| `godot --path . -- --mobile` | The phone layout and input in a window: touch from the mouse, tilt from the pointer's x position or the left stick (see [Phone (Android)](#phone-android)). |
 | `godot --path . res://demo/demo.tscn` | The renderer demo: a small diorama with a scripted car. |
 
 ## How the renderer works
@@ -293,6 +314,8 @@ godot --path . --fixed-fps 120 -- --drivetest=/tmp/drive
 godot --path . --fixed-fps 120 -- --drivetest=/tmp/drive --preset=heavy --dtonly=spawn,jump,lap
 ```
 
+`--dtonly=mobile` (with `-- --mobile`) checks the phone layer with injected touches and a simulated tilt: the automatic throttle after the lights, BRAKE slowing and then reversing, NITRO, both held on two fingers, tilt through the analogue path (dead zone, curve, full lock, flip), the pause button and back, taps in the pause menu, backing out of a wall with BRAKE and tilt, and the reel and level select by tap and swipe. `--dtonly=mobile_shots` (also with `--mobile`, `--mobilewin=1600x720` for the window size) saves phone screenshots (iso and chase at 54, 60 and 66 rows, the reel, level select, lights, driving, the pause menu) and the frame time with vsync off, per viewport. Both are skipped without `--mobile`.
+
 `--dtonly=key_steer` measures keyboard steering through real key events at top speed, half speed and 3.5 u/s: time to full lock, 60 and 120 ms taps, a timed and a feedback lane change, a held corner, and a slide caught with the keys on asphalt, dirt and snow.
 
 It writes `results.txt` and PNGs to the given folder and quits. Unless a scenario changes it, it drives Figure Eight. It covers top speed, braking, each corner's clean speed, behaviour past the limit, the drift, the nitro, the jump, the bridge, kerbs, collisions, reset, pausing, gamepad bindings, the lighting modes, autopilot laps and the demo reel's driver (`--dtonly=demo_laps`).
@@ -325,13 +348,18 @@ godot --path . --fixed-fps 60 -- --attractshots=/tmp/attract-frames --attractsiz
 Install the Godot export templates matching your Godot version, then:
 
 ```sh
-tools/release.sh 0.4             # build and package Windows, Linux, macOS and the web build
+tools/release.sh 0.4             # build and package Windows, Linux, macOS, the web build and Android
 tools/release.sh 0.4 --publish   # also tag v0.4, push, and create the GitHub release
+tools/release.sh 0.6-android.1 --only android --publish --prerelease   # one target, as a prerelease
 ```
 
-The script sets the version, exports Windows, Linux, macOS and the web build, smoke-tests the Linux build, and writes the archives and `SHA256SUMS.txt` to `build/release/<version>/`. A missing or incomplete export of any target stops it. With `--publish` it needs a clean working tree and an authenticated `gh`; release notes are taken from `docs/releases/<version>.md` if that file exists.
+The script sets the version, exports the five targets, smoke-tests the Linux build, verifies the APK, and writes the archives, the APK and `SHA256SUMS.txt` to `build/release/<version>/`. A missing or incomplete export of any target, or a missing Android toolchain, stops it. With `--publish` it needs a clean working tree and an authenticated `gh`; release notes are taken from `docs/releases/<version>.md` if that file exists. `--only <target>[,<target>...]` (`windows`, `linux`, `macos`, `web`, `android`) builds, packages and attaches only those; `--prerelease` marks the GitHub release as a prerelease, so the latest release stays where it is. GitHub Pages is updated only when the web build is part of a release that is not a prerelease.
 
-The presets are in `export_presets.cfg`. All four targets build from Linux. Windows and Linux embed the game data in the executable; the web build is a folder (`index.html`, `index.js`, `index.wasm`, `index.pck` and a few small files). To export a single target by hand:
+**Android** needs the Android SDK (build-tools with `aapt2` and `apksigner`, at the path in Godot's editor settings or `ANDROID_HOME`), Java and the release keystore. The keystore's variables (`GODOT_ANDROID_KEYSTORE_RELEASE_PATH`, `_USER`, `_PASSWORD`, which Godot's export reads) come from the environment or from `~/.config/ascii-racer/android-release.env` (another file with `ANDROID_RELEASE_ENV=<file>`); nothing about the key is in the repository. The script sets the APK's version name to the release version and its version code to the commit count (plus one for the version bump commit), checks that the code is above every earlier release's, and stops unless the APK verifies, is signed with the release key, reports `com.eiwe.asciiracer`, the new version and `arm64-v8a`, and contains the game data. **Keep the keystore and its password**: an APK signed with a different key cannot be installed over an earlier one, so losing it means every player has to uninstall first (and loses their settings).
+
+A debug APK for trying things out (signed with Godot's debug key) builds without the release keystore: `godot --headless --path . --export-debug "Android" build/android/ascii-racer.apk`. The launcher icons are made from the logo's letters by `tools/make_android_icons.py` (written to `assets/android/`, which Godot does not import, so the other builds do not carry them).
+
+The presets are in `export_presets.cfg`. All five targets build from Linux. Windows and Linux embed the game data in the executable; the web build is a folder (`index.html`, `index.js`, `index.wasm`, `index.pck` and a few small files). To export a single target by hand:
 
 ```sh
 godot --headless --path . --export-release "Linux" build/linux/ascii-racer.x86_64

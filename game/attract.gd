@@ -184,10 +184,10 @@ func _begin_play() -> void:
 	g.car.apply_tuning(_player_values)
 	g.tuning.current = _player_preset
 	g.car.nitro_enabled = true
-	g.race_start.tip_pending = true # the camera tip before this game's first lights
+	g.race_start.tip_pending = not Mobile.active() # the camera tip before this game's first lights (keys only)
 	g.reset_to_grid()
 	g.update_opponent(true)
-	g.set_chase_view(false)
+	g.set_chase_view(g.start_in_chase())
 	g.controls.hud.visible = false # minimised; its legend shows in the corner
 	g.controls.enabled = true
 	g.panel.enabled = true

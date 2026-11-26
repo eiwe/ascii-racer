@@ -69,6 +69,9 @@ var track_settings: Dictionary = {} ## id -> {time, opponent, best}
 ## it was chosen at, so it can be kept the same size on another display.
 var glyph_px: int = 0
 var glyph_scale: float = 1.0
+## Phone settings ([phone] section, written only when a phone set one): flip
+## (steering), rows (glyph size), camera ("chase" / "iso").
+var phone: Dictionary = {}
 var settings_path: String = SETTINGS_PATH
 ## True when a volume or the mute changed since the settings were loaded or saved.
 var dirty: bool = false
@@ -372,6 +375,16 @@ func record_lap(id: String, t: float) -> bool:
 	return true
 
 
+func phone_get(key: String, default: Variant) -> Variant:
+	return phone.get(key, default)
+
+
+func phone_set(key: String, value: Variant) -> void:
+	if phone.get(key) != value:
+		phone[key] = value
+		dirty = true
+
+
 func set_glyph_choice(px: int, scale: float) -> void:
 	glyph_px = clampi(px, 0, 64)
 	glyph_scale = maxf(scale, 0.5)
@@ -442,6 +455,10 @@ func load_settings() -> void:
 	opponent_level = int(_track_entry(track_id).opponent)
 	glyph_px = clampi(int(cfg.get_value("display", "glyph_px", 0)), 0, 64)
 	glyph_scale = maxf(float(cfg.get_value("display", "glyph_scale", 1.0)), 0.5)
+	phone = {}
+	if cfg.has_section("phone"):
+		for k in cfg.get_section_keys("phone"):
+			phone[k] = cfg.get_value("phone", k)
 
 
 ## Writes the settings file if anything changed.
@@ -466,6 +483,8 @@ func save_settings() -> void:
 	if glyph_px > 0:
 		cfg.set_value("display", "glyph_px", glyph_px)
 		cfg.set_value("display", "glyph_scale", glyph_scale)
+	for k: String in phone:
+		cfg.set_value("phone", k, phone[k])
 	if cfg.save(settings_path) != OK:
 		push_warning("could not save audio settings to " + settings_path)
 	else:

@@ -17,12 +17,21 @@ extends Node
 signal opened
 signal closed
 
-enum Item { RESUME, RESTART, CHANGE_TRACK, START_RACE, OPPONENT, ZOOM, VOLUME, MUSIC, SFX, SOUND_CHECK, TITLE, QUIT }
+enum Item { RESUME, RESTART, CHANGE_TRACK, START_RACE, OPPONENT, ZOOM, VOLUME, MUSIC, SFX, SOUND_CHECK, TITLE, QUIT, CAMERA, GLYPH, FLIP }
 const LABELS: Dictionary = {
 	Item.RESUME: "RESUME", Item.RESTART: "RESTART", Item.CHANGE_TRACK: "CHANGE TRACK", Item.START_RACE: "START RACE",
 	Item.OPPONENT: "OPPONENT", Item.ZOOM: "ZOOM", Item.VOLUME: "VOLUME", Item.MUSIC: "MUSIC", Item.SFX: "SFX", Item.SOUND_CHECK: "SOUND CHECK",
 	Item.TITLE: "TO TITLE", Item.QUIT: "QUIT",
+	Item.CAMERA: "CAMERA", Item.GLYPH: "GLYPH SIZE", Item.FLIP: "FLIP STEERING",
 }
+## Phone rows (Mobile.active()), after ZOOM. A later row joins this list.
+const PHONE_ITEMS: Array[int] = [Item.CAMERA, Item.GLYPH, Item.FLIP]
+## Phone: rows this many cells apart, and taps ignored this long after opening
+## (the tap that opened it). While open, the glyphs grow so the menu fills the
+## height (phone_menu_px): single-cell text at the phone's driving size is too
+## small to read or tap.
+const PHONE_ROW_H: int = 2
+const PHONE_TAP_GRACE: float = 0.2
 ## Sound check: roles and how they are named.
 const CHECK: Array = [
 	["engine_loop_0", "ENGINE IDLE"], ["engine_loop_1", "ENGINE MID"], ["engine_loop_2", "ENGINE HIGH"],
@@ -56,6 +65,8 @@ var _stick := Vector2i.ZERO
 var _hold_dir := Vector2i.ZERO
 var _hold_t: float = 0.0
 var _opponent_at_open: int = 0
+## Phone: [cell rect, item index, value x, bar width] per row, from the last draw.
+var _hits: Array = []
 
 
 func _ready() -> void:
@@ -74,13 +85,21 @@ func open(reel: bool) -> void:
 		items.append_array([Item.RESUME, Item.RESTART])
 		if game.get("attract") != null:
 			items.append(Item.CHANGE_TRACK)
-	items.append_array([Item.OPPONENT, Item.ZOOM, Item.VOLUME, Item.MUSIC, Item.SFX, Item.SOUND_CHECK])
+	if Mobile.active():
+		# No sound check on the phone (a row less to fit); the phone's own rows.
+		items.append_array([Item.OPPONENT, Item.ZOOM])
+		items.append_array(PHONE_ITEMS)
+		items.append_array([Item.VOLUME, Item.MUSIC, Item.SFX])
+	else:
+		items.append_array([Item.OPPONENT, Item.ZOOM, Item.VOLUME, Item.MUSIC, Item.SFX, Item.SOUND_CHECK])
 	if not reel and game.get("attract") != null:
 		items.append(Item.TITLE)
 	if not OS.has_feature("web"):
 		items.append(Item.QUIT) # a browser page cannot quit
 	selected = 0
 	_opponent_at_open = audio.opponent_level
+	if Mobile.active():
+		renderer.settings.glyph_px = phone_menu_px()
 	is_open = true
 	_t = 0.0
 	get_tree().paused = true
@@ -95,6 +114,8 @@ func close() -> void:
 	if not is_open:
 		return
 	is_open = false
+	if Mobile.active() and game.has_method("default_glyph_px"):
+		renderer.settings.glyph_px = game.default_glyph_px() # the driving size again
 	audio.stop_audition()
 	audio.save_settings()
 	get_tree().paused = false
@@ -134,6 +155,13 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 	get_viewport().set_input_as_handled()
+	if Mobile.active():
+		var mb := event as InputEventMouseButton
+		var mm := event as InputEventMouseMotion
+		if mb != null and mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+			tap(mb.position, false)
+		elif mm != null and mm.button_mask & MOUSE_BUTTON_MASK_LEFT:
+			tap(mm.position, true)
 	if k != null:
 		var dir := Vector2i.ZERO
 		match k.keycode:
@@ -218,6 +246,18 @@ func _move(dir: Vector2i) -> void:
 		Item.SOUND_CHECK:
 			check_index = posmod(check_index + dir.x, CHECK.size())
 			audio.stop_audition()
+		Item.CAMERA:
+			var chase: bool = audio.phone_get("camera", "chase") == "iso"
+			audio.phone_set("camera", "chase" if chase else "iso")
+			if not in_reel and game.has_method("set_chase_view"):
+				game.set_chase_view(chase)
+		Item.GLYPH:
+			# Larger glyphs = fewer rows.
+			game.set_phone_rows(game.phone_rows() - dir.x * Mobile.ROWS_STEP)
+		Item.FLIP:
+			audio.phone_set("flip", not bool(audio.phone_get("flip", false)))
+			if game.get("tilt") != null:
+				game.tilt.flip = bool(audio.phone_get("flip", false))
 
 
 func _choose() -> void:
@@ -240,7 +280,7 @@ func _choose() -> void:
 			game.attract.start(false)
 		Item.QUIT:
 			audio.quit()
-		Item.OPPONENT, Item.VOLUME, Item.MUSIC, Item.SFX:
+		Item.OPPONENT, Item.VOLUME, Item.MUSIC, Item.SFX, Item.CAMERA, Item.GLYPH, Item.FLIP:
 			_move(Vector2i.RIGHT)
 		Item.ZOOM:
 			# Enter cycles, back to AUTO after the farthest step.
@@ -273,7 +313,8 @@ func _draw() -> void:
 		for c: Array in CHECK:
 			check_w = maxi(check_w, AsciiLogo.mini_width("< %s >" % c[1], Vector2i.ONE, 0))
 		value_w = maxi(bar_w + 3 + AsciiLogo.mini_width("100%", Vector2i.ONE, 0), check_w)
-	var row_h := 6 if big else 2
+	var row_h := 6 if big else (PHONE_ROW_H if Mobile.active() else 2)
+	_hits.clear()
 	var content_w := label_w + 4 + value_w
 	var tpix := Vector2i(2, 1) if AsciiLogo.mini_width(title, Vector2i(2, 1), 1) <= content_w and ov.rows >= 50 else Vector2i.ONE
 	var title_w := AsciiLogo.mini_width(title, tpix, 1 if tpix.x > 1 else 0)
@@ -308,7 +349,20 @@ func _draw() -> void:
 			ov.text(lx, y, LABELS[it], ink)
 		var vx := lx + label_w + 4
 		var vy := y
+		_hits.append([Rect2i(x0 - 2, y - (row_h - 1) / 2, w + 4, row_h), i, vx, bar_w])
 		match it:
+			Item.CAMERA, Item.GLYPH, Item.FLIP:
+				var txt := "< %s >" % phone_value(it)
+				if big:
+					_logo.draw_mini(txt, vx, vy, Vector2i.ONE, 0, func(_f: float) -> Color: return ink, 0.0)
+				else:
+					ov.text(vx, vy, txt, ink)
+				if sel:
+					# Beside the value in plain cells, under it with block letters.
+					if big:
+						ov.text(vx, vy + 5, phone_note(it), INK_DIM)
+					else:
+						ov.text(vx + txt.length() + 2, vy, phone_note(it), INK_DIM)
 			Item.OPPONENT:
 				var v := "OFF" if audio.opponent_level == 0 else str(audio.opponent_level)
 				var txt := "< %s >" % v
@@ -344,9 +398,78 @@ func _draw() -> void:
 					ov.text(vx, vy + (5 if big else 1), "Enter / A plays it" if has else "(no file)", INK_DIM)
 		y += row_h
 	var hint := "Up/Down move  Left/Right adjust  Enter choose  Esc close  M mute" + ("  [MUTED]" if audio.muted else "")
+	if Mobile.active():
+		hint = "Tap a row   tap < or > to change   Back resumes" + ("  [MUTED]" if audio.muted else "")
 	if hint.length() > w:
 		hint = "Arrows  Enter  Esc" + (" [MUTED]" if audio.muted else "")
 	ov.text(x0 + (w - hint.length()) / 2, y0 + h - 1, hint, INK_DIM)
+
+
+## Phone: the glyph size while the menu is open, so its rows (title, items,
+## hint) fill about the window height; never smaller than the driving size.
+func phone_menu_px() -> int:
+	var need := 5 + 3 + items.size() * PHONE_ROW_H + 3 + 4
+	var h := renderer.get_viewport().get_visible_rect().size.y
+	return clampi(floori(h / float(need)), renderer.settings.glyph_px, 64)
+
+
+## A phone row's value.
+func phone_value(it: int) -> String:
+	match it:
+		Item.CAMERA:
+			return "CHASE" if audio.phone_get("camera", "chase") != "iso" else "ISO"
+		Item.GLYPH:
+			return "%d PX" % game.default_glyph_px()
+		Item.FLIP:
+			return "ON" if bool(audio.phone_get("flip", false)) else "OFF"
+	return ""
+
+
+func phone_note(it: int) -> String:
+	match it:
+		Item.CAMERA:
+			return "the view races start in"
+		Item.GLYPH:
+			return "%d rows on the screen" % game.phone_rows()
+		Item.FLIP:
+			return "if tilting right steers left"
+	return ""
+
+
+## Phone: a tap (or, on a volume bar, a drag) at `pos` in window pixels. A tap
+## on a row selects it; on its value, the left half steps down and the right
+## half up (a bar takes the tapped level); on an action row it chooses it.
+func tap(pos: Vector2, drag: bool) -> void:
+	if _t < PHONE_TAP_GRACE and not drag:
+		return
+	var r := renderer
+	var win := r.get_viewport().get_visible_rect().size
+	var cell := Vector2i((pos * Vector2(r.output_size) / win / Vector2(r.pitch)).floor())
+	for h: Array in _hits:
+		if not (h[0] as Rect2i).has_point(cell):
+			continue
+		var i: int = h[1]
+		var it: int = items[i]
+		var vx: int = h[2]
+		var bar_w: int = h[3]
+		selected = i
+		if it in [Item.VOLUME, Item.MUSIC, Item.SFX] and cell.x >= vx:
+			var v := clampf(float(cell.x - vx) / float(bar_w), 0.0, 1.0)
+			match it:
+				Item.VOLUME: audio.set_master_volume(v)
+				Item.MUSIC: audio.set_music_volume(v)
+				Item.SFX: audio.set_sfx_volume(v)
+			return
+		if drag:
+			return
+		var adjustable := it in [Item.OPPONENT, Item.ZOOM, Item.SOUND_CHECK, Item.CAMERA, Item.GLYPH, Item.FLIP]
+		if adjustable:
+			if cell.x >= vx:
+				var txt_w := ("< %s >" % (phone_value(it) if it in PHONE_ITEMS else "XXXX")).length()
+				_move(Vector2i.LEFT if cell.x < vx + txt_w / 2 else Vector2i.RIGHT)
+		else:
+			_choose()
+		return
 
 
 ## The ZOOM row's value: AUTO or the step's multiplier.

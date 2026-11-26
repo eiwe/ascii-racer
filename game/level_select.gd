@@ -363,8 +363,25 @@ func _input(event: InputEvent) -> void:
 			_stick = s
 			if s != Vector2i.ZERO:
 				_move(Vector2i(s.x, 0) if s.x != 0 else Vector2i(0, s.y))
+	elif mb != null and mb.button_index == MOUSE_BUTTON_LEFT and Mobile.active():
+		# Phone: a tap acts when the finger lifts; a sideways swipe changes circuit.
+		if mb.pressed:
+			_press_pos = mb.position
+		elif _press_pos.x >= 0.0:
+			var d := mb.position - _press_pos
+			var w := get_viewport().get_visible_rect().size.x
+			if absf(d.x) > SWIPE_MIN * w and absf(d.x) > 1.5 * absf(d.y):
+				_change_track(-1 if d.x > 0.0 else 1) # finger to the left: the next circuit
+			else:
+				_click(_press_pos)
+			_press_pos = Vector2(-1.0, -1.0)
 	elif mb != null and mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
 		_click(mb.position)
+
+
+## The phone's back button: back to the reel.
+func go_back() -> void:
+	_back()
 
 
 func _move(dir: Vector2i) -> void:
@@ -428,6 +445,11 @@ func _click(pos: Vector2) -> void:
 ## Where everything goes for a grid of cols x rows: the title band (name, facts),
 ## the rows strip and hint at the bottom, the arrows, and `view`: the free
 ## rectangle (cells) the preview fits the circuit into.
+## Phone: a swipe is at least this share of the window width.
+const SWIPE_MIN: float = 0.08
+var _press_pos := Vector2(-1.0, -1.0)
+
+
 func _layout(cols: int, rows: int) -> Dictionary:
 	var def: Dictionary = Tracks.ALL[index]
 	var big := rows >= 50 and cols >= 120
@@ -562,7 +584,8 @@ func _draw() -> void:
 		else:
 			ov.text(rect.position.x, rect.position.y, txt, ink)
 		_hits.append([rect.grow(2), ["time", "opponent", "start"][i]])
-	var hint := "Left/Right track   Up/Down select   Enter start   Esc back"
+	var hint := "Swipe or tap < > for the circuit   tap a row to change it   tap START" if Mobile.active() \
+		else "Left/Right track   Up/Down select   Enter start   Esc back"
 	ov.text((cols - hint.length()) / 2, l.hint_y, hint, INK_DIM, 0.8, PANEL_BG)
 	if _wipe >= 0.0:
 		_draw_wipe(ov, _wipe)

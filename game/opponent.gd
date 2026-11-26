@@ -118,7 +118,7 @@ func set_level(l: int) -> void:
 
 ## Both cars side by side on the grid at rest; the race tracking restarts.
 func to_grid() -> void:
-	var s: float = Track.START_S - float(game.world.GRID_BACK)
+	var s: float = _track.start_s - float(game.world.GRID_BACK)
 	game.car.teleport(_track.pose_at(s, -GRID_LATERAL))
 	car.teleport(_track.pose_at(s, GRID_LATERAL))
 	car.refill_nitro()

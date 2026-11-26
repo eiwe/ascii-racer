@@ -48,6 +48,8 @@ extends Camera3D
 @export_range(0.5, 20.0, 0.5) var unblock_speed: float = 4.0
 
 ## Multiplies `distance` (the , and . keys).
+## Keep following while another camera is current (the view blend reads it).
+var drive_when_hidden: bool = false
 var distance_scale: float = 1.0:
 	set(v):
 		distance_scale = clampf(v, 0.5, 2.5)
@@ -103,7 +105,7 @@ func _want_distance() -> float:
 
 
 func _process(delta: float) -> void:
-	if target == null or not current:
+	if target == null or not (current or drive_when_hidden):
 		return
 	var xf := target.get_global_transform_interpolated()
 	if xf.origin.distance_to(_last_pivot) > 3.0:

@@ -62,6 +62,10 @@ func _ready() -> void:
 	beam.light_specular = 0.0 # view dependent: shifts glyphs as the camera moves
 	beam.shadow_enabled = true
 	beam.shadow_bias = 0.04
+	# Not on the Compatibility g-buffer twins: a shadowed light that reaches them
+	# left the whole g-buffer empty there (every cell read as sky). No meshes are
+	# on that layer under Forward+, so this changes nothing there.
+	beam.light_cull_mask &= ~AsciiRenderer.GBUFFER_LAYER
 	add_child(beam)
 	var head := lamp_material(HEAD_LAMP_COLOR)
 	_tail_mat = lamp_material(TAIL_COLOR)
@@ -77,6 +81,7 @@ func _ready() -> void:
 	_glow.light_color = GLOW_COLOR
 	_glow.light_specular = 0.0
 	_glow.shadow_enabled = false
+	_glow.light_cull_mask &= ~AsciiRenderer.GBUFFER_LAYER
 	add_child(_glow)
 
 

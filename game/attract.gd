@@ -51,6 +51,8 @@ func _ready() -> void:
 		elif arg.begins_with("--attractsize="):
 			var wh := arg.trim_prefix("--attractsize=").split("x")
 			game.renderer.fixed_output_size = Vector2i(int(wh[0]), int(wh[1]))
+	game.level_select.start_requested.connect(_on_select_start)
+	game.level_select.back_requested.connect(_on_select_back)
 	cine = CineCamera.new()
 	cine.target = game.car
 	game.world.add_child(cine)
@@ -59,12 +61,19 @@ func _ready() -> void:
 		_capture.call_deferred()
 
 
-## Enters the reel. `cold` = straight away (game start), otherwise via a wipe.
+## Enters the reel. `cold` = straight away (game start), otherwise via a wipe
+## (coming back from a race or the level select: the reel always runs on track 1
+## in the default lighting).
 func start(cold: bool) -> void:
 	if cold:
 		_enter()
 	else:
-		_wipe_to(_enter)
+		_wipe_to(func() -> void:
+			if game.level_select.active:
+				game.level_select.close()
+			game.set_track(Tracks.DEFAULT_ID)
+			game.lighting.set_mode(Lighting.DEFAULT_MODE)
+			_enter())
 
 
 func _enter() -> void:
@@ -115,15 +124,48 @@ func _enter() -> void:
 
 ## True while the reel or a wipe owns the overlay (NitroHud leaves it alone).
 func busy() -> bool:
-	return active or _wipe >= 0.0
+	return active or _wipe >= 0.0 or game.level_select != null and game.level_select.active
 
 
-## Leaves the reel for the game: car on the grid at rest, iso camera, HUD on.
+## Leaves the reel for the level select, then (START) the game: car on the
+## grid at rest, iso camera, HUD on.
 func start_game() -> void:
 	if not active:
 		return
 	active = false
-	_wipe_to(_begin_play)
+	_wipe_to(_open_select)
+
+
+## From a race (the pause menu's CHANGE TRACK): back to the level select.
+func change_track() -> void:
+	_wipe_to(func() -> void:
+		game.race_start.cancel()
+		game.remove_opponent()
+		game.car.player_input = false
+		game.controls.enabled = false
+		game.panel.set_open(false)
+		game.panel.enabled = false
+		game.level_select.open())
+
+
+func _open_select() -> void:
+	if driver != null:
+		driver.queue_free()
+		driver = null
+	if director != null:
+		director.queue_free()
+		director = null
+	game.level_select.open()
+
+
+func _on_select_start() -> void:
+	_wipe_to(func() -> void:
+		game.level_select.close()
+		_begin_play())
+
+
+func _on_select_back() -> void:
+	start(false)
 
 
 func _begin_play() -> void:

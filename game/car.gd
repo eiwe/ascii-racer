@@ -28,6 +28,15 @@ const DRIFT_BLEND_TIME: float = 0.06
 const DRIFT_EXIT_BLEND_DEG: float = 10.0
 const DRIFT_EXIT_DONE_DEG: float = 2.0
 const DRIFT_EXIT_MAX_TIME: float = 0.7
+## Player keys: the slowest turn-in rate the speed scaling may give (full lock
+## per second; 2.5 = 0.4 s), so a slow-steering preset stays drivable.
+const KEY_STEER_MIN_RATE: float = 2.5
+## Fraction of top speed below which player keys keep the full `steer_speed`
+## (parking and hairpins); the slowdown ramps in linearly from here to top speed.
+const KEY_STEER_SLOW_FROM: float = 0.3
+## Slip angle past which steering toward the slip side counts as catching a
+## slide and keeps the full key rate.
+const KEY_COUNTER_SLIP_DEG: float = 3.0
 ## Tank (seconds) needed to start a burn: holding the button on an empty tank
 ## does not stutter on the trickle.
 const NITRO_MIN_START: float = 0.15
@@ -87,6 +96,13 @@ const NITRO_MIN_START: float = 0.15
 @export_range(0.5, 30.0, 0.5) var steer_speed: float = 6.0
 ## Keys: how fast it returns to centre when the input eases off.
 @export_range(0.5, 30.0, 0.5) var steer_return_speed: float = 9.0
+## Player keys: the turn-in rate at top speed as a fraction of `steer_speed`,
+## ramped in linearly from `KEY_STEER_SLOW_FROM` of top speed (1 = the same at
+## every speed). Keys jump straight to full input, so a slower turn-in at speed
+## turns a tap into a small correction instead of a snap. Never below
+## `KEY_STEER_MIN_RATE`; the return to centre and counter-steering into a slide
+## stay at full rate, and scripted drivers always use `steer_speed`.
+@export_range(0.1, 1.0, 0.05) var key_steer_fast_ratio: float = 0.45
 ## Analogue stick: how fast the wheel follows the stick (full lock per second).
 ## Much faster than for keys; the thumb already does the smoothing.
 @export_range(1.0, 120.0, 1.0) var stick_steer_speed: float = 40.0
@@ -218,6 +234,21 @@ var steer_angle: float = 0.0 ## front wheel angle, radians, + right
 var steer_lock: float = 0.0 ## full-lock angle at the current speed, radians
 var wheels_grounded: int = 0
 var wheels_on_road: int = 0
+## Surface under each wheel (fl, fr, rl, rr) last physics step (Surfaces id; &"" in the air).
+var wheel_surface: Array[StringName] = [&"", &"", &"", &""]
+## Sum of the grounded wheels' grip relative to asphalt, and whether any wheel
+## is on a surface other than asphalt or the plain ground (dirt, snow...).
+var _grip_ratio_sum: float = 0.0
+var _special_surface: bool = false
+var _drift_loss_sum: float = 0.0
+## Per wheel: how hard it is sliding sideways (0 = gripping, 1 = well past the
+## tyre's peak) and spinning under power (0..1), for the dust and tyre sounds.
+var wheel_slide: PackedFloat32Array = [0.0, 0.0, 0.0, 0.0]
+var wheel_spin: PackedFloat32Array = [0.0, 0.0, 0.0, 0.0]
+## Per wheel, last step: grip relative to asphalt, and whether it was on a
+## surface other than asphalt or the plain ground (for split-grip braking).
+var _wheel_ratio: PackedFloat32Array = [1.0, 1.0, 1.0, 1.0]
+var _wheel_special: Array[bool] = [false, false, false, false]
 var slip_angle: float = 0.0 ## car body slip (radians), + = moving to its right
 var local_accel: Vector3 = Vector3.ZERO ## filtered, body frame: x right, z forward
 ## Per wheel (fl, fr, rl, rr): how much of the tyre's grip is asked for, 1 = at the
@@ -382,6 +413,9 @@ func _physics_process(delta: float) -> void:
 
 	wheels_grounded = 0
 	wheels_on_road = 0
+	_grip_ratio_sum = 0.0
+	_special_surface = false
+	_drift_loss_sum = 0.0
 	for i in 4:
 		var front := i < 2
 		var mount := xf * _mounts[i]
@@ -391,14 +425,23 @@ func _physics_process(delta: float) -> void:
 		if hit.is_empty():
 			_wheel_drop[i] = travel_up + travel_down
 			wheel_usage[i] = 0.0
+			wheel_surface[i] = &""
+			wheel_slide[i] = 0.0
+			wheel_spin[i] = 0.0
+			_wheel_special[i] = false
 			continue
 		var dist := mount.distance_to(hit.position)
 		var hub := clampf(dist - wheel_radius, 0.0, travel_up + travel_down)
 		_wheel_drop[i] = hub
 		wheels_grounded += 1
-		var on_road: bool = hit.collider.get_meta(&"surface", &"road") == &"road"
+		var surf: StringName = hit.collider.get_meta(&"surface", &"road")
+		wheel_surface[i] = surf
+		var classic := Surfaces.is_classic(surf)
+		var on_road: bool = surf == &"road" or not classic and bool(Surfaces.get_value(surf, "on_road", true))
 		if on_road:
 			wheels_on_road += 1
+		if not classic:
+			_special_surface = true
 
 		var contact: Vector3 = hit.position
 		var normal: Vector3 = hit.normal
@@ -420,7 +463,18 @@ func _physics_process(delta: float) -> void:
 		var v_long := pv.dot(wf)
 		var v_lat := pv.dot(ws)
 
-		var mu := (grip_road if on_road else grip_ground) * (front_grip if front else rear_grip)
+		var surf_grip := (grip_road if on_road else grip_ground) if classic else grip_road * float(Surfaces.get_value(surf, "grip", 1.0))
+		_grip_ratio_sum += surf_grip / grip_road
+		var ratio_prev := _wheel_ratio[i]
+		_wheel_ratio[i] = surf_grip / grip_road
+		_wheel_special[i] = not classic
+		# Surface factors on the car's own tunables (1 on asphalt and the ground).
+		var f_rear := 1.0 if classic else float(Surfaces.get_value(surf, "rear_grip", 1.0))
+		var f_power := 1.0 if classic else float(Surfaces.get_value(surf, "power_oversteer", 1.0))
+		var f_coast := 1.0 if classic else float(Surfaces.get_value(surf, "coast", 1.0))
+		var f_brake := 1.0 if classic else float(Surfaces.get_value(surf, "brake", 1.0))
+		_drift_loss_sum += 1.0 if classic else float(Surfaces.get_value(surf, "drift_loss", 1.0))
+		var mu := surf_grip * (front_grip if front else rear_grip * f_rear)
 		if not front and handbrake_input and (not drift_mode or forward_speed < drift_min_speed and absf(steer_input) >= drift_steer_threshold):
 			mu *= handbrake_rear_grip
 		var grip := mu * load
@@ -429,12 +483,14 @@ func _physics_process(delta: float) -> void:
 
 		# Lateral: slip-angle curve, peak at peak_slip, easing to slide_grip beyond.
 		var alpha := atan2(v_lat, maxf(absf(v_long), low_speed_slip))
-		var x := alpha / deg_to_rad(peak_slip_deg)
-		var shape := x if absf(x) <= 1.0 else signf(x) * lerpf(1.0, slide_grip, clampf((absf(x) - 1.0) / 1.5, 0.0, 1.0))
+		var ps := peak_slip_deg if classic else peak_slip_deg * float(Surfaces.get_value(surf, "peak_slip", 1.0))
+		var sg := slide_grip if classic else minf(slide_grip * float(Surfaces.get_value(surf, "slide_grip", 1.0)), 1.0)
+		var x := alpha / deg_to_rad(ps)
+		var shape := x if absf(x) <= 1.0 else signf(x) * lerpf(1.0, sg, clampf((absf(x) - 1.0) / 1.5, 0.0, 1.0))
 		var f_lat := -grip * shape
 		if not front and throttle_input > 0.0 and forward_speed > -0.5:
 			var rv := clampf(forward_speed / top_speed, 0.0, 1.0)
-			f_lat *= 1.0 - power_oversteer * throttle_input * (1.0 - rv * rv)
+			f_lat *= 1.0 - (power_oversteer if f_power == 1.0 else minf(power_oversteer * f_power, 0.9)) * throttle_input * (1.0 - rv * rv)
 		f_lat = clampf(f_lat, -absf(v_lat) * stop, absf(v_lat) * stop)
 
 		# Longitudinal.
@@ -455,7 +511,7 @@ func _physics_process(delta: float) -> void:
 				var pivot := drift_mode and forward_speed < drift_min_speed and absf(steer_input) >= drift_steer_threshold
 				braking += mass * 0.5 * handbrake_decel * (DRIFT_PIVOT_BRAKE if pivot else 1.0)
 			if throttle_input <= 0.0 and brake_input <= 0.0 and forward_speed > 0.5:
-				braking += mass * 0.5 * engine_braking
+				braking += mass * 0.5 * engine_braking * f_coast
 			if nitro_level > 0.0 and forward_speed > -0.5:
 				var rn := clampf(forward_speed / top_eff, 0.0, 1.0)
 				f_long += nitro_level * mass * 0.5 * nitro_accel * (1.0 - rn * rn)
@@ -463,10 +519,19 @@ func _physics_process(delta: float) -> void:
 				braking += mass * 0.5 * nitro_overspeed_drag * (forward_speed - top_speed) * (1.0 - nitro_level)
 		if brake_input > 0.0 and forward_speed >= 0.5:
 			var bias := brake_front_bias if front else 1.0 - brake_front_bias
-			braking += brake_input * mass * brake_decel * bias * 0.5
-		braking += corner_mass * rolling_decel
+			braking += brake_input * mass * brake_decel * bias * 0.5 * f_brake
+		braking += corner_mass * rolling_decel * (f_coast if throttle_input <= 0.0 else 1.0)
 		if not on_road:
 			braking += corner_mass * offroad_drag * absf(v_long)
+		elif not classic:
+			braking += corner_mass * float(Surfaces.get_value(surf, "drag", 0.0)) * absf(v_long)
+		# Split grip (one wheel of an axle on snow or dirt, the other not): the
+		# grippier wheel brakes no harder than its partner can (select-low, as
+		# ABS does), so braking does not yank the car round. Never on asphalt
+		# and plain ground alone.
+		var pair := i ^ 1
+		if braking > 0.0 and (_wheel_special[i] or _wheel_special[pair]) and ratio_prev > _wheel_ratio[pair]:
+			braking *= _wheel_ratio[pair] / maxf(ratio_prev, 1e-3)
 		# Brakes and drag only ever bring the contact patch to rest, never reverse it.
 		f_long -= signf(v_long) * minf(braking, absf(v_long) * stop)
 
@@ -475,6 +540,9 @@ func _physics_process(delta: float) -> void:
 		var g_long := grip * grip_long_ratio
 		wheel_usage[i] = Vector2(f_long / maxf(g_long, 1e-6), x).length()
 		var use := Vector2(f_long / maxf(g_long, 1e-6), f_lat / maxf(grip, 1e-6)).length()
+		wheel_slide[i] = clampf((absf(x) - 1.0) / 1.5, 0.0, 1.0)
+		# Wheelspin: drive asking for more than the tyre has left (rear, under power).
+		wheel_spin[i] = clampf((use - 1.0) * 2.0, 0.0, 1.0) if not front and f_long > 0.0 else 0.0
 		if use > 1.0:
 			f /= use
 		f *= 1.0 - _drift_w
@@ -489,19 +557,28 @@ func _physics_process(delta: float) -> void:
 	air_time = 0.0 if wheels_grounded > 0 else air_time + delta
 	if wheels_grounded == 0:
 		_stabilise_in_air(up)
+	_update_dust()
 	_update_visuals(delta)
 
 
 func _update_steering(delta: float) -> void:
 	var target := clampf(steer_input, -1.0, 1.0)
+	var t := clampf(absf(forward_speed) / top_speed, 0.0, 1.0)
 	var rate: float
 	if steer_analog:
 		target = signf(target) * pow(absf(target), stick_steer_exponent)
 		rate = stick_steer_speed
+	elif absf(target) > absf(_steer_state) and signf(target) == signf(_steer_state) or _steer_state == 0.0:
+		rate = steer_speed
+		# Player keys turn in more slowly at speed, unless they counter-steer
+		# into a slide (steering toward the slip side, as the lock opening does).
+		var counter := absf(slip_angle) > deg_to_rad(KEY_COUNTER_SLIP_DEG) and signf(target) == signf(slip_angle)
+		if player_input and not counter and forward_speed > 0.0:
+			var k := clampf((t - KEY_STEER_SLOW_FROM) / (1.0 - KEY_STEER_SLOW_FROM), 0.0, 1.0)
+			rate = maxf(steer_speed * lerpf(1.0, key_steer_fast_ratio, k), minf(steer_speed, KEY_STEER_MIN_RATE))
 	else:
-		rate = steer_speed if absf(target) > absf(_steer_state) and signf(target) == signf(_steer_state) or _steer_state == 0.0 else steer_return_speed
+		rate = steer_return_speed
 	_steer_state = move_toward(_steer_state, target, rate * delta)
-	var t := clampf(absf(forward_speed) / top_speed, 0.0, 1.0)
 	var lock := deg_to_rad(lerpf(max_steer_low_deg, max_steer_high_deg, t))
 	if countersteer_open_deg > 0.0 and forward_speed > 1.0 and _steer_state != 0.0 and signf(_steer_state) == signf(slip_angle):
 		lock = lerpf(lock, deg_to_rad(max_steer_low_deg), clampf(absf(slip_angle) / deg_to_rad(countersteer_open_deg), 0.0, 1.0))
@@ -630,11 +707,13 @@ func _apply_drift_forces(delta: float, up: Vector3, fwd: Vector3) -> void:
 	if drift_state == Drift.DRIFT:
 		var on_road := float(wheels_on_road) / maxf(wheels_grounded, 1.0)
 		var surface := lerpf(grip_ground, grip_road, on_road) / grip_road
+		if _special_surface:
+			surface = _grip_ratio_sum / maxf(wheels_grounded, 1.0)
 		var kappa := drift_carve * (drift_carve_neutral + (1.0 - drift_carve_neutral) * inside if inside >= 0.0 else drift_carve_neutral * (1.0 + inside))
 		var a_lat := minf(spd * spd * kappa, drift_grip * G * surface) * g_frac
 		drift_radius = spd * spd / a_lat if a_lat > 1e-3 else INF
 		apply_central_force(side * drift_dir * mass * a_lat * _drift_w)
-		var a_long := -drift_speed_loss - (1.0 - throttle_input) * (rolling_decel + engine_braking) \
+		var a_long := -drift_speed_loss * (_drift_loss_sum / maxf(wheels_grounded, 1.0) if _special_surface else 1.0) - (1.0 - throttle_input) * (rolling_decel + engine_braking) \
 				- brake_input * brake_decel * 0.5 - offroad_drag * spd * (1.0 - on_road)
 		apply_central_force(vdir * mass * a_long * g_frac * _drift_w)
 		drift_target = deg_to_rad(clampf(drift_angle_deg + drift_angle_steer_deg * inside, 5.0, drift_angle_max_deg))
@@ -688,6 +767,38 @@ func _update_visuals(delta: float) -> void:
 
 
 ## Puts the car at `xf` (on the ground plane) standing still.
+var _dust: Dust
+
+
+## Dust behind the rear wheels when they slide, spin or drift on a dusty surface.
+func _update_dust() -> void:
+	var colour := Color.TRANSPARENT
+	var k := 0.0
+	for i in [2, 3]:
+		var surf := wheel_surface[i]
+		if surf == &"" or Surfaces.is_classic(surf):
+			continue
+		var c: Variant = Surfaces.get_value(surf, "dust", null)
+		if c == null:
+			continue
+		colour = c
+		k = maxf(k, maxf(wheel_slide[i], wheel_spin[i]))
+		k = maxf(k, maxf(wheel_slide[i - 2], 0.0) * 0.7)
+	if colour.a > 0.0:
+		var spd := clampf(absf(forward_speed) / 3.0, 0.0, 1.0)
+		if drift_state == Drift.DRIFT:
+			k = maxf(k, 0.8)
+		k *= maxf(spd, wheel_spin[2])
+	if _dust == null:
+		if colour.a == 0.0 or k <= 0.12:
+			return
+		_dust = Dust.new()
+		_dust.car = self
+		add_child(_dust)
+	var rear := (_mounts[2] + _mounts[3]) * 0.5 if _mounts.size() == 4 else Vector3(0.0, 0.0, 0.4)
+	_dust.feed(colour, k, Vector3(rear.x, rear.y - 0.12, rear.z + 0.05))
+
+
 func teleport(xf: Transform3D) -> void:
 	global_transform = Transform3D(xf.basis.orthonormalized(), xf.origin + Vector3.UP * 0.02)
 	linear_velocity = Vector3.ZERO

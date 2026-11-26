@@ -1,11 +1,13 @@
 ## Game controller: driving HUD with telemetry, lap timer, car reset, handling
 ## presets and the tuning panel, pad rumble, the iso / chase camera switch (Q,
-## pad B), lighting modes (keys 1-7, the sun on J L I K), the G (grid snap)
+## pad B), lighting modes (keys 1-9, the sun on J L I K), the G (grid snap)
 ## and V (rumble) keys, the see-through halo in the bridge,
 ## attract mode (the demo reel it opens on; Esc returns to it), and the
 ## `--drivetest=<dir>` scripted test mode.
 ##   --play                     start in the game, skipping the reel
-##   --lighting=<name|1-7>      start in this lighting mode (default 1 sunset)
+##   --lighting=<name|1-9>      start in this lighting mode (default 1 sunset)
+##   --track=<id>               start on this track (with --play; default: the saved one)
+##   --time=<morning|noon|night>   its time of day (with --play; default: the track's saved one)
 ##   --preset=<name>            start with this handling preset
 ##   --tune=prop=value,...      then override single tunables (quick experiments)
 ##   --attractshots=<dir>       capture the reel (see Attract)
@@ -14,19 +16,27 @@ extends Node
 
 const DRIVE_KEYS: String = """Keys  WASD drive (arrows too while tuning is closed)  Space handbrake
       Shift nitro  R reset  Q camera  G grid snap  V rumble  F1 tuning  F2 F3 preset  F5 save
-      1-7 lighting  J L swing sun  I K raise / lower sun (moon at night; not in classic)
+      1-9 lighting  J L swing sun  I K raise / lower sun (moon at night; not in classic)
       Esc menu  M mute
 Pad   L-stick steer  RT throttle  LT brake  A handbrake  L-stick click nitro  Y reset  B camera
       R-stick look (chase)  Start menu  Back tuning  LB RB preset  R-stick click save"""
 ## How often the last on-track position is remembered for R.
 const SAFE_POSE_INTERVAL: float = 0.25
 const FLASH_TIME: float = 1.5
-## Default glyph size on a Retina Mac (the normal default is AsciiSettings.glyph_px).
+## Default glyph size at a display scale of 2 (a Retina Mac, Windows at 200 %);
+## at 1 it is AsciiSettings.glyph_px (9). Between 1 and 2 it is interpolated,
+## above 2 it grows in proportion (glyph_default_for).
 const RETINA_GLYPH_PX: int = 20
 ## Web build: default glyph size at a device pixel ratio of 2 (the page is drawn
-## in device pixels); between 1 and 2 it is interpolated from the normal default,
-## above 2 it grows in proportion.
-const WEB_HIDPI_GLYPH_PX: int = 16
+## in device pixels), and at 1. Web glyphs are a little larger than desktop ones.
+const WEB_HIDPI_GLYPH_PX: int = 22
+const WEB_GLYPH_PX: int = 12
+## The default never puts more text rows than this on the screen's full height
+## in device pixels, whatever scale the screen reports (a 4K monitor at 100 %
+## reports 1): the owner's 9 px desktop and 12 px web glyphs on a 1440-high
+## screen.
+const MAX_ROWS_DESKTOP: int = 160
+const MAX_ROWS_WEB: int = 120
 
 @onready var renderer: AsciiRenderer = $AsciiRenderer
 # The renderer moves its children into its SceneViewport during its own _ready.
@@ -60,6 +70,10 @@ var countdown_enabled: bool = true
 ## Web only, until the first key or click: the start screen that lets the
 ## browser switch on sound before the reel (see WebStart).
 var web_start: WebStart
+## Between the reel and a race (see LevelSelect).
+var level_select: LevelSelect
+## The eased move between the iso and chase views (see ViewBlend).
+var view_blend: ViewBlend
 
 var _safe_pose: Transform3D
 var _safe_timer: float = 0.0
@@ -82,11 +96,15 @@ func _ready() -> void:
 	camera.renderer = renderer
 	camera.snap_to_target()
 	laps = LapTimer.new(track)
+	laps.lap_completed.connect(_on_lap)
 	_safe_pose = world.grid_pose()
 
-	# On a Retina Mac the default 9 px glyphs are too small to read as characters.
-	_web_ratio = AsciiControls.display_scale()
-	renderer.settings.glyph_px = default_glyph_px()
+	# The default glyph size follows the display (9 px glyphs are too small to
+	# read as characters on a dense screen).
+	_scripted = scripted_run()
+	_display_scale = AsciiControls.display_scale()
+	_display_default = default_glyph_px()
+	renderer.settings.glyph_px = _display_default
 
 	controls = AsciiControls.new()
 	controls.renderer = renderer
@@ -102,6 +120,12 @@ func _ready() -> void:
 		lighting.set_mode(i)
 		flash("lighting %d %s" % [i + 1, lighting.mode_name()]))
 	chase = world.chase
+	view_blend = ViewBlend.new()
+	view_blend.name = "ViewBlend"
+	view_blend.iso = camera
+	view_blend.chase = chase
+	world.add_child(view_blend)
+	view_blend.finished.connect(func(on: bool) -> void: set_chase_view(on))
 	_halo_light = OmniLight3D.new()
 	_halo_light.name = "HaloLight"
 	_halo_light.shadow_enabled = false
@@ -135,7 +159,7 @@ func _ready() -> void:
 	# A glyph size the player chose (saved with the settings) replaces the
 	# platform default; scripted runs keep the default so their output does not
 	# depend on the settings file.
-	if not scripted_run() and audio.glyph_px > 0:
+	if not _scripted and audio.glyph_px > 0:
 		renderer.settings.glyph_px = chosen_glyph_px()
 	controls.glyph_size_changed.connect(_on_glyph_size_changed)
 	car_audio = CarAudio.new()
@@ -154,6 +178,11 @@ func _ready() -> void:
 	pause_menu.opened.connect(func() -> void:
 		controls.legend_allowed = false
 		controls.legend.visible = false)
+
+	level_select = LevelSelect.new()
+	level_select.name = "LevelSelect"
+	level_select.game = self
+	add_child(level_select)
 
 	race_start = RaceStart.new()
 	race_start.name = "RaceStart"
@@ -190,6 +219,18 @@ func _ready() -> void:
 			add_child(test)
 			scripted = true
 	if not scripted and OS.get_cmdline_user_args().has("--play"):
+		# The saved track and its time of day (or --track= / --time=).
+		var tid := audio.track_id
+		var tod := ""
+		for arg in OS.get_cmdline_user_args():
+			if arg.begins_with("--track="):
+				tid = arg.trim_prefix("--track=")
+			elif arg.begins_with("--time="):
+				tod = arg.trim_prefix("--time=")
+		audio.select_track(Tracks.get_def(tid).id)
+		set_track(audio.track_id)
+		if not _lighting_arg():
+			apply_time_of_day(tod if tod != "" else audio.track_time(audio.track_id))
 		race_start.tip_pending = true # the camera tip before the first lights
 		reset_to_grid() # the start lights
 		update_opponent(true)
@@ -215,6 +256,44 @@ func _ready() -> void:
 				at.game = self
 				at.out_dir = arg.trim_prefix("--attracttest=")
 				add_child(at)
+
+
+## Switches the world to track `id` (a Tracks id): the circuit and its scenery
+## are rebuilt, the lap timer, the opponent and the safe pose follow. The car
+## is not moved (reset_to_grid() does that).
+func set_track(id: String) -> void:
+	var def := Tracks.get_def(id)
+	var had_opponent := opponent != null
+	if had_opponent:
+		remove_opponent()
+	if not world.load_track(def):
+		if had_opponent:
+			update_opponent(false)
+		return
+	track = world.track
+	laps = LapTimer.new(track)
+	laps.lap_completed.connect(_on_lap)
+	_safe_pose = world.grid_pose()
+	if renderer.shadow_hatch:
+		renderer._apply_shadow_hatch() # light twins for the new meshes
+
+
+## Lights the world for a time of day ("morning", "noon", "night").
+func apply_time_of_day(t: String) -> void:
+	lighting.set_mode(Lighting.TIME_MODES.get(t, Lighting.TIME_MODES[AudioDirector.DEFAULT_TIME]))
+
+
+func _lighting_arg() -> bool:
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--lighting="):
+			return true
+	return false
+
+
+## A lap was completed: kept as the track's best if it is.
+func _on_lap(t: float) -> void:
+	if audio.record_lap(world.track_def.id, t):
+		flash("best lap %s" % LapTimer.fmt(t))
 
 
 ## Puts the car on the grid at rest with the lap timer reset (start of a game).
@@ -270,14 +349,25 @@ func _on_zoom(step: int) -> void:
 ## Switches between the isometric and the chase camera. The iso camera keeps
 ## following in the background, so switching back restores its framing (zoom,
 ## snapping, look-ahead) exactly as it would have been.
+## Switches views at once (scripted runs, the reel); the player's camera key
+## blends instead (blend_view).
 func set_chase_view(on: bool) -> void:
 	chase_view = on
+	if view_blend.active:
+		view_blend.cancel()
+	lighting.fog_offset = 0.0
 	if on:
 		chase.current = true
 		chase.snap_to_target()
 	else:
 		camera.current = true
 	renderer.distance_fade = CHASE_FADE if on and chase_fade else Vector2.ZERO
+
+
+## The player's view switch: an eased move (ViewBlend); pressing again mid-move reverses it.
+func blend_view(on: bool) -> void:
+	chase_view = on
+	view_blend.start(on)
 
 
 func _update_pad_text(pads: Array[int] = Input.get_connected_joypads()) -> void:
@@ -303,8 +393,16 @@ const HALO_LIGHT_FADE: float = 5.0 ## per second
 ## in view by themselves (line of sight).
 func _update_halo(delta: float) -> void:
 	var iso := renderer.scene_viewport.get_camera_3d() == camera
+	var iso_w := 1.0 if iso else 0.0
+	if view_blend.active:
+		# Mid-switch: the halo shrinks away (or grows back) with the iso share,
+		# and the chase view's fades sit as far behind the car as at the chase end.
+		iso_w = 1.0 - view_blend.weight
+		iso = iso_w > 0.5
+		renderer.distance_fade = CHASE_FADE + Vector2.ONE * view_blend.extra_distance if chase_fade else Vector2.ZERO
+		lighting.fog_offset = view_blend.extra_distance
 	var origin := car.get_global_transform_interpolated().origin
-	HaloOccluder.set_target(origin + Vector3.UP * HALO_TARGET_HEIGHT, HaloOccluder.RADIUS if iso else 0.0)
+	HaloOccluder.set_target(origin + Vector3.UP * HALO_TARGET_HEIGHT, HaloOccluder.RADIUS * iso_w)
 	# Under cover the car sits in the occluder's shadow and would be a dim shape
 	# in the hole: light it, and the patch of road around it, while it is there.
 	_halo_light_level = move_toward(_halo_light_level, 1.0 if iso and _under_cover else 0.0, delta * HALO_LIGHT_FADE)
@@ -342,18 +440,34 @@ func reset_car() -> void:
 
 
 var _display_log_t: float = -1.0
-var _web_ratio: float = 1.0
-var _web_ratio_t: float = 0.0
+var _scripted: bool = false
+var _display_scale: float = 1.0
+var _display_default: int = 0
+var _display_t: float = 0.0
 
 
-## The default glyph size here: AsciiSettings' (9 px), 20 px on a Retina Mac,
-## and on the web by the device pixel ratio (web_glyph_px).
+## The default glyph size on this display (glyph_default_for). Scripted runs
+## keep the fixed sizes their baselines were made with: 9 px, 20 px at scale 2.
 func default_glyph_px() -> int:
-	if OS.has_feature("web"):
-		return web_glyph_px(AsciiControls.display_scale())
-	if AsciiControls.display_scale() >= 2.0:
-		return RETINA_GLYPH_PX
-	return AsciiSettings.new().glyph_px
+	if _scripted:
+		return RETINA_GLYPH_PX if AsciiControls.display_scale() >= 2.0 else AsciiSettings.new().glyph_px
+	return glyph_default_for(OS.has_feature("web"), AsciiControls.display_scale(), DisplayServer.screen_get_size().y)
+
+
+## The default glyph size for a display: by its scale (desktop 9 px at 1 and
+## 20 at 2, web 12 and 22; interpolated between, in proportion above), but at
+## least the screen height in device pixels over MAX_ROWS_DESKTOP / _WEB.
+static func glyph_default_for(web: bool, scale: float, screen_h: int) -> int:
+	var lo := WEB_GLYPH_PX if web else AsciiSettings.new().glyph_px
+	var hi := WEB_HIDPI_GLYPH_PX if web else RETINA_GLYPH_PX
+	var px := lo
+	if scale > 2.0:
+		px = roundi(hi * scale / 2.0)
+	elif scale > 1.0:
+		px = roundi(lerpf(lo, hi, scale - 1.0))
+	if screen_h > 0:
+		px = maxi(px, ceili(float(screen_h) / float(MAX_ROWS_WEB if web else MAX_ROWS_DESKTOP)))
+	return clampi(px, 6, 64)
 
 
 ## The player's saved glyph size, kept the same physical size on this display:
@@ -386,35 +500,32 @@ func _on_glyph_size_changed(px: int) -> void:
 	audio.save_settings()
 
 
-## Web build: the default glyph size for a device pixel ratio.
-static func web_glyph_px(ratio: float) -> int:
-	var base := AsciiSettings.new().glyph_px
-	if ratio <= 1.0:
-		return base
-	if ratio <= 2.0:
-		return roundi(lerpf(base, WEB_HIDPI_GLYPH_PX, ratio - 1.0))
-	return roundi(WEB_HIDPI_GLYPH_PX * ratio / 2.0)
-
-
-## Web build: the device pixel ratio changes with browser zoom or a move to
-## another monitor. The text of the HUD, legend and tuning panel follows, and
-## so does the glyph size unless the player has set it themselves.
-func _check_web_ratio(delta: float) -> void:
-	_web_ratio_t += delta
-	if _web_ratio_t < 0.5:
+## The display scale changes with browser zoom, Windows' scaling setting or a
+## move to another monitor (which can also change the screen height). The text
+## of the HUD, legend and tuning panel follows, and so does the glyph size: the
+## player's own size is kept the same physical size, the default is replaced by
+## the new default. Not in scripted runs.
+func _check_display(delta: float) -> void:
+	_display_t += delta
+	if _display_t < 0.5:
 		return
-	_web_ratio_t = 0.0
+	_display_t = 0.0
 	var r := AsciiControls.display_scale()
-	if is_equal_approx(r, _web_ratio):
+	var d := default_glyph_px()
+	var rescaled := not is_equal_approx(r, _display_scale)
+	if not rescaled and d == _display_default:
 		return
 	if audio.glyph_px > 0:
-		_web_ratio = r
-		renderer.settings.glyph_px = chosen_glyph_px() # the player's size, same physical size
-	elif renderer.settings.glyph_px == web_glyph_px(_web_ratio):
-		renderer.settings.glyph_px = web_glyph_px(r)
-	_web_ratio = r
-	controls.apply_scale()
-	panel.apply_scale()
+		if rescaled:
+			_display_scale = r
+			renderer.settings.glyph_px = chosen_glyph_px()
+	elif renderer.settings.glyph_px == _display_default:
+		renderer.settings.glyph_px = d
+	_display_scale = r
+	_display_default = d
+	if rescaled:
+		controls.apply_scale()
+		panel.apply_scale()
 
 
 ## `--webdisplaylog`: print the display scale and sizes every two seconds
@@ -431,15 +542,17 @@ func _log_display(delta: float) -> void:
 	print("[settings] master %.2f music %.2f sfx %.2f muted %s opponent %d zoom %d, tuning presets %s current %s" % [
 		audio.master_volume, audio.music_volume, audio.sfx_volume, audio.muted, audio.opponent_level, audio.zoom_setting,
 		tuning.names, tuning.current])
-	print("[display] screen scale %.2f, window %s, output %s, grid %dx%d, glyph %d px, HUD scale %.2f" % [
-		DisplayServer.screen_get_scale(), get_window().size, renderer.output_size, renderer.cols, renderer.rows,
-		renderer.settings.glyph_px, AsciiControls.display_scale()])
+	var gm := AsciiControls.glyph_measure(renderer.settings.glyph_px)
+	print("[display] screen scale %.2f (reported %.3f, dpi %d), screen %s, window %s, output %s, grid %dx%d, glyph %d px (%.1f logical, %d rows/screen; default %d), HUD scale %.2f" % [
+		DisplayServer.screen_get_scale(), AsciiControls.reported_scale(), DisplayServer.screen_get_dpi(), DisplayServer.screen_get_size(),
+		get_window().size, renderer.output_size, renderer.cols, renderer.rows,
+		renderer.settings.glyph_px, gm.x, roundi(gm.y), default_glyph_px(), AsciiControls.display_scale()])
 
 
 func _process(delta: float) -> void:
 	_log_display(delta)
-	if OS.has_feature("web"):
-		_check_web_ratio(delta)
+	if not _scripted:
+		_check_display(delta)
 	nitro_hud.race_text = opponent.status_text() if opponent != null and not race_start.counting else ""
 	camera.zoom_choice = audio.zoom_setting
 	# The camera shortcut joins the corner legend (once the start's camera tip,
@@ -501,7 +614,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not controls.enabled:
 		return
 	if event.is_action_pressed(&"camera_toggle"):
-		set_chase_view(not chase_view)
+		blend_view(not chase_view)
 		flash("chase view" if chase_view else "iso view")
 		race_start.dismiss_tip()
 		get_viewport().set_input_as_handled()

@@ -17,9 +17,9 @@ extends Node
 signal opened
 signal closed
 
-enum Item { RESUME, RESTART, START_RACE, OPPONENT, ZOOM, VOLUME, MUSIC, SFX, SOUND_CHECK, TITLE, QUIT }
+enum Item { RESUME, RESTART, CHANGE_TRACK, START_RACE, OPPONENT, ZOOM, VOLUME, MUSIC, SFX, SOUND_CHECK, TITLE, QUIT }
 const LABELS: Dictionary = {
-	Item.RESUME: "RESUME", Item.RESTART: "RESTART", Item.START_RACE: "START RACE",
+	Item.RESUME: "RESUME", Item.RESTART: "RESTART", Item.CHANGE_TRACK: "CHANGE TRACK", Item.START_RACE: "START RACE",
 	Item.OPPONENT: "OPPONENT", Item.ZOOM: "ZOOM", Item.VOLUME: "VOLUME", Item.MUSIC: "MUSIC", Item.SFX: "SFX", Item.SOUND_CHECK: "SOUND CHECK",
 	Item.TITLE: "TO TITLE", Item.QUIT: "QUIT",
 }
@@ -72,6 +72,8 @@ func open(reel: bool) -> void:
 		items.append(Item.START_RACE)
 	else:
 		items.append_array([Item.RESUME, Item.RESTART])
+		if game.get("attract") != null:
+			items.append(Item.CHANGE_TRACK)
 	items.append_array([Item.OPPONENT, Item.ZOOM, Item.VOLUME, Item.MUSIC, Item.SFX, Item.SOUND_CHECK])
 	if not reel and game.get("attract") != null:
 		items.append(Item.TITLE)
@@ -228,6 +230,9 @@ func _choose() -> void:
 		Item.START_RACE:
 			close()
 			game.attract.start_game()
+		Item.CHANGE_TRACK:
+			close()
+			game.attract.change_track()
 		Item.SOUND_CHECK:
 			audio.audition(CHECK[check_index][0])
 		Item.TITLE:

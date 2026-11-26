@@ -148,4 +148,5 @@ if [ -n "$NOTES" ]; then NOTE_ARGS=(--notes-file "$NOTES"); else NOTE_ARGS=(--ge
 gh release create "$TAG" "$WIN" "$LIN" "$MAC" "$WEB" "$OUT/SHA256SUMS.txt" --title "ASCII Racer $VERSION" --verify-tag "${NOTE_ARGS[@]}"
 gh release view "$TAG" --json url --jq .url
 step "Web build to GitHub Pages"
+# The root of the site; preview subdirectories (deploy_pages.sh --subdir) stay.
 tools/deploy_pages.sh origin

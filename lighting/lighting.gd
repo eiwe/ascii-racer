@@ -17,7 +17,7 @@ extends Node
 
 signal changed
 
-## The modes, in key order (1-7). Keys of an entry:
+## The modes, in key order (1-9). Keys of an entry:
 ##   name             shown on the HUD
 ##   classic          true = the original lighting, nothing else applies
 ##   sun_az, sun_el   sun direction, degrees (azimuth: 0 = north / -z, 90 = east / +x)
@@ -59,7 +59,18 @@ const MODES: Array[Dictionary] = [
 	{"name": "sweep", "sun_az": 240.0, "sun_el": 22.0, "sun_color": Color(1.0, 0.8, 0.58), "sun_energy": 3.4,
 		"ambient_color": Color(0.42, 0.52, 0.85), "ambient_energy": 0.3, "ground": Color(0.2, 0.21, 0.17), "track": 1.25,
 		"shadow_hard": true, "shadow_distance": 60.0, "shadow_size": 8192, "sweep": true},
+	# Times of day for the level select (after the numbered experiments, so their
+	# numbers and the capture names stay put). Morning: a low, cooler-gold sun in
+	# the east under a dawn sky; noon: a high white sun, short shadows, blue sky.
+	{"name": "morning", "sun_az": 110.0, "sun_el": 17.0, "sun_color": Color(1.0, 0.82, 0.66), "sun_energy": 3.3,
+		"ambient_color": Color(0.5, 0.56, 0.82), "ambient_energy": 0.34, "ground": Color(0.19, 0.21, 0.17), "track": 1.2,
+		"shadow_hard": true, "shadow_distance": 60.0, "shadow_size": 8192, "glint": true, "sky": "morning"},
+	{"name": "noon", "sun_az": 200.0, "sun_el": 62.0, "sun_color": Color(1.0, 0.98, 0.94), "sun_energy": 2.5,
+		"ambient_color": Color(0.6, 0.7, 0.95), "ambient_energy": 0.42, "ground": Color(0.16, 0.2, 0.13), "track": 1.05,
+		"shadow_hard": true, "shadow_distance": 60.0, "shadow_size": 8192, "glint": true, "sky": "noon"},
 ]
+## Times of day (level select) -> mode index.
+const TIME_MODES: Dictionary = {"morning": 7, "noon": 8, "night": 1}
 ## The mode a scene starts in (sunset).
 const DEFAULT_MODE: int = 0
 
@@ -78,6 +89,8 @@ const COMPAT_ENERGY: Dictionary = {
 	"hatched": [1.0, 0.55, 1.0, 1.0],
 	"glint": [1.0, 0.55, 1.0, 1.0],
 	"sweep": [1.0, 0.55, 1.0, 1.0],
+	"morning": [1.0, 0.6, 1.0, 1.0],
+	"noon": [1.0, 0.6, 1.0, 1.0],
 }
 static var compat: bool = RenderingServer.get_current_rendering_method() == "gl_compatibility"
 ## Index of classic (the byte-identity reference).
@@ -196,6 +209,12 @@ func add_surfaces(root: Node) -> void:
 				_surfaces[m] = (m as ShaderMaterial).get_shader_parameter("albedo")
 
 
+## Forgets the registered track surfaces (before a new circuit registers its own).
+func clear_surfaces() -> void:
+	_set_track_gain(1.0)
+	_surfaces.clear()
+
+
 func _set_track_gain(k: float) -> void:
 	for m: Material in _surfaces:
 		var c: Color = _surfaces[m]
@@ -215,9 +234,21 @@ func is_classic() -> bool:
 
 
 ## Switches to mode `index` (0-based).
+## The current track's overrides per mode name (Tracks' time_tweaks: the time
+## names are the mode names), merged over the mode's table in set_mode.
+var tweaks: Dictionary = {}
+## The level select's preview look per mode name, merged after the tweaks
+## (LevelSelect.PREVIEW_LIGHT); empty in a race.
+var preview: Dictionary = {}
+
+
 func set_mode(index: int) -> void:
 	mode = clampi(index, 0, MODES.size() - 1)
 	var m: Dictionary = MODES[mode]
+	if tweaks.has(m.name):
+		m = m.merged(tweaks[m.name], true)
+	if preview.has(m.name):
+		m = m.merged(preview[m.name], true)
 	var classic: bool = m.get("classic", false)
 	if classic:
 		sun.basis = Basis.looking_at(-CLASSIC_FROM.normalized(), Vector3.UP)
@@ -363,10 +394,19 @@ var glint_highlight: bool = true:
 func _set_glint(on: bool) -> void:
 	if car == null:
 		return
+	# Not under Compatibility (the web build): there, putting the car's meshes
+	# on GLINT_LAYER for the rim light turned the teal car lime in the browser
+	# (WebGL through ANGLE; desktop GL drew it right). Without the material, the
+	# rim light or the highlight it stayed lime; only leaving the glint out
+	# entirely kept the car's own colour.
+	if compat:
+		return
 	if on and _glint_materials.is_empty():
 		var body: MeshInstance3D
 		var meshes: Array[MeshInstance3D] = []
 		for mi: MeshInstance3D in car.find_children("*", "MeshInstance3D", true, false):
+			if mi.get_parent() is CarLights:
+				continue # the night lamps come and go; they are not bodywork
 			if mi.layers & AsciiRenderer.LIGHT_LAYER:
 				continue # a shadow-hatching twin
 			meshes.append(mi)
@@ -403,7 +443,10 @@ func _set_glint(on: bool) -> void:
 		add_child(_rim)
 		_aim_rim()
 	elif not on and not _glint_materials.is_empty():
-		for mi: MeshInstance3D in _glint_materials:
+		for k: Variant in _glint_materials:
+			if not is_instance_valid(k):
+				continue
+			var mi := k as MeshInstance3D
 			for e: Array in _glint_materials[mi]:
 				mi.set_surface_override_material(e[0], e[1])
 			mi.layers &= ~GLINT_LAYER
@@ -432,6 +475,17 @@ var sweep_running: bool = true
 const SKY_SHADERS: Dictionary = {
 	"sunset": preload("res://lighting/sunset_sky.gdshader"),
 	"night": preload("res://lighting/night_sky.gdshader"),
+	"morning": preload("res://lighting/sunset_sky.gdshader"),
+	"noon": preload("res://lighting/sunset_sky.gdshader"),
+}
+## Sky shader parameters per kind (on top of the shader's defaults).
+const SKY_PARAMS: Dictionary = {
+	"morning": {"zenith": Color(0.16, 0.24, 0.48), "high": Color(0.55, 0.5, 0.66), "low": Color(0.98, 0.7, 0.5),
+		"band": Color(1.0, 0.84, 0.6), "below": Color(0.1, 0.09, 0.1), "sky_energy": 0.95,
+		"cloud_lit": Color(1.0, 0.86, 0.74), "cloud_shade": Color(0.6, 0.58, 0.7), "cloud_under": Color(0.45, 0.42, 0.55)},
+	"noon": {"zenith": Color(0.12, 0.32, 0.78), "high": Color(0.3, 0.55, 0.92), "low": Color(0.62, 0.78, 0.96),
+		"band": Color(0.82, 0.9, 0.99), "below": Color(0.16, 0.2, 0.24), "sky_energy": 0.95,
+		"cloud_lit": Color(1.0, 1.0, 1.0), "cloud_shade": Color(0.78, 0.8, 0.88), "cloud_under": Color(0.62, 0.66, 0.76)},
 }
 ## Perspective views fade into the sky over this depth range (world units).
 const SKY_FOG: Vector2 = Vector2(14.0, 42.0)
@@ -444,10 +498,17 @@ const SKY_FOG: Vector2 = Vector2(14.0, 42.0)
 const COMPAT_FOG_COLOR: Dictionary = {
 	"sunset": Color8(33, 24, 56),
 	"night": Color8(15, 22, 50),
+	"morning": Color8(100, 88, 120),
+	"noon": Color8(70, 92, 175),
 }
 
 var _skies: Dictionary = {} ## name -> Sky
 var _sky_on: bool = false
+## True while a far view (the level select's preview) must not fade into the sky.
+var fog_suppressed: bool = false
+## Pushes the sky's depth fog back by this much (the view blend's extra distance).
+var fog_offset: float = 0.0
+var _fog: Vector2 = SKY_FOG
 
 
 ## `kind`: a key of SKY_SHADERS, or "" for none (the black void).
@@ -458,12 +519,16 @@ func _set_sky(kind: String, fog: Vector2 = SKY_FOG) -> void:
 		if not _skies.has(kind):
 			var mat := ShaderMaterial.new()
 			mat.shader = SKY_SHADERS[kind]
+			var params: Dictionary = SKY_PARAMS.get(kind, {})
+			for k: String in params:
+				mat.set_shader_parameter(k, params[k])
 			var sky := Sky.new()
 			sky.sky_material = mat
 			_skies[kind] = sky
 		environment.sky = _skies[kind]
 		environment.background_mode = Environment.BG_SKY
 		environment.fog_mode = Environment.FOG_MODE_DEPTH
+		_fog = fog
 		environment.fog_depth_begin = fog.x
 		environment.fog_depth_end = fog.y
 		if compat:
@@ -536,7 +601,10 @@ func _process(delta: float) -> void:
 		_light_cars() # cars that arrived since (the opponent)
 	if _sky_on:
 		var cam := get_viewport().get_camera_3d()
-		environment.fog_enabled = cam != null and cam.projection == Camera3D.PROJECTION_PERSPECTIVE
+		environment.fog_enabled = cam != null and cam.projection == Camera3D.PROJECTION_PERSPECTIVE and not fog_suppressed
+		if fog_offset != 0.0 or environment.fog_depth_begin != _fog.x:
+			environment.fog_depth_begin = _fog.x + fog_offset
+			environment.fog_depth_end = _fog.y + fog_offset
 	if _glint_material != null:
 		var cam := get_viewport().get_camera_3d()
 		var ortho := cam != null and cam.projection == Camera3D.PROJECTION_ORTHOGONAL

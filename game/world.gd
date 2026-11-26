@@ -13,6 +13,10 @@ var camera: FollowCamera
 var chase: ChaseCamera
 var props: Node3D
 var lighting: Lighting
+## Which circuit is built (a Tracks definition); load_track() swaps it.
+var track_def: Dictionary = Tracks.FIGURE_EIGHT
+
+signal track_changed
 ## The finish gate over the start line (a static body).
 var gate: StaticBody3D
 
@@ -20,17 +24,9 @@ var gate: StaticBody3D
 
 func _ready() -> void:
 	_build_environment()
-	track = Track.new()
-	track.name = "Track"
-	add_child(track)
-	props = Node3D.new()
-	props.name = "Props"
-	add_child(props)
-	_build_props()
+	_build_track()
 	car = CAR_SCENE.instantiate() as Car
 	add_child(car)
-	lighting.set_ground(track.get_node("Ground") as GeometryInstance3D)
-	lighting.add_surfaces(track)
 	lighting.car = car
 	car.global_transform = grid_pose()
 	camera = FollowCamera.new()
@@ -46,7 +42,39 @@ func _ready() -> void:
 
 ## Where the car starts: on the centre line, behind the start line.
 func grid_pose() -> Transform3D:
-	return track.pose_at(Track.START_S - GRID_BACK)
+	return track.pose_at(track.start_s - GRID_BACK)
+
+
+## The circuit, its scenery and their lighting registration.
+func _build_track() -> void:
+	track = Track.new()
+	track.name = "Track"
+	track.def = track_def
+	add_child(track)
+	props = Node3D.new()
+	props.name = "Props"
+	add_child(props)
+	_build_props()
+	lighting.tweaks = track_def.get("time_tweaks", {})
+	lighting.set_ground(track.get_node("Ground") as GeometryInstance3D)
+	lighting.add_surfaces(track)
+
+
+## Swaps the circuit for another (the car stays; Game puts it on the grid).
+## Returns false if it is already this one.
+func load_track(def: Dictionary) -> bool:
+	if def.id == track_def.id and track != null:
+		return false
+	track_def = def
+	lighting.clear_surfaces()
+	for n: Node in [track, props]:
+		remove_child(n)
+		n.free()
+	gate = null
+	_build_track()
+	lighting.set_mode(lighting.mode) # the new materials take the mode's look
+	track_changed.emit()
+	return true
 
 
 # Environment and sun: see Lighting (shared with the demo scene).
@@ -77,11 +105,30 @@ func _static_prop(file: String, pos: Vector3, yaw_deg: float, scale_v: Variant, 
 	return body
 
 
-func add_tree(pos: Vector3, pine: bool, scale_f: float) -> void:
+func add_tree(pos: Vector3, pine: bool, scale_f: float, snow: bool = false) -> void:
 	var trunk := CylinderShape3D.new()
 	trunk.radius = 0.16 * scale_f
 	trunk.height = 0.8 * scale_f
-	_static_prop("tree-pine" if pine else "tree", pos, pos.x * 37.0, scale_f, trunk, Vector3(0.0, trunk.height * 0.5, 0.0))
+	var body := _static_prop("tree-pine" if pine else "tree", pos, pos.x * 37.0, scale_f, trunk, Vector3(0.0, trunk.height * 0.5, 0.0))
+	if snow and body != null:
+		# Snow on the top: a white cone over the upper part of the crown.
+		var top := 0.0
+		var r := 0.0
+		for mi: MeshInstance3D in body.find_children("*", "MeshInstance3D", true, false):
+			var bb := body.global_transform.affine_inverse() * mi.global_transform * mi.mesh.get_aabb()
+			top = maxf(top, bb.end.y)
+			r = maxf(r, maxf(bb.size.x, bb.size.z) * 0.5)
+		var cap := MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = 0.0
+		cm.bottom_radius = r * 0.62
+		cm.height = top * 0.42
+		cm.radial_segments = 8
+		cm.rings = 1
+		cap.mesh = cm
+		cap.material_override = _marker_material(Color("eef2f8"))
+		cap.position = Vector3(0.0, top - cm.height * 0.5 + 0.01, 0.0)
+		body.add_child(cap)
 
 
 func add_cone(pos: Vector3) -> void:
@@ -120,8 +167,9 @@ func _build_props() -> void:
 	# whole road is open between them. Each leg is solid up to LEG_SOLID_HEIGHT:
 	# its collider is the convex hull of its own mesh there, so what you see is
 	# what you hit, and a car sliding along it meets smooth faces, not box corners.
-	var gate_pos := track.point_at(Track.START_S)
-	var t := track.tangent_at(Track.START_S)
+	var theme: Dictionary = track_def.get("theme", {})
+	var gate_pos := track.point_at(track.start_s)
+	var t := track.tangent_at(track.start_s)
 	var half := Track.ROAD_HALF_WIDTH + 0.02
 	gate = _static_prop("gate-finish", gate_pos, rad_to_deg(atan2(t.x, t.z)), Vector3(half / GATE_LEG_INNER, 1.6, 1.6), null, Vector3.ZERO)
 	var inv := gate.global_transform.affine_inverse()
@@ -161,27 +209,40 @@ func _build_props() -> void:
 
 	# Trees: a seeded scatter over the area round the circuit, kept well clear
 	# of the road (and of the gate).
+	_build_trees(theme, gate_pos)
+	_build_cones(theme)
+	_build_markers(theme)
+
+
+func _build_trees(theme: Dictionary, gate_pos: Vector3) -> void:
+	if not theme.get("trees", true):
+		return
 	var rng := RandomNumberGenerator.new()
-	rng.seed = TREE_SEED
+	rng.seed = theme.get("tree_seed", TREE_SEED)
 	var area := track.bounds.grow(9.0)
-	var clear := Track.ROAD_HALF_WIDTH + Track.KERB_WIDTH + TREE_CLEARANCE
+	var clear := Track.ROAD_HALF_WIDTH + Track.KERB_WIDTH + TREE_CLEARANCE + (1.3 if track.arena else 0.0)
 	var step := 3.4
 	var x := area.position.x
 	while x < area.end.x:
 		var z := area.position.z
 		while z < area.end.z:
 			var p := Vector3(x + rng.randf_range(-1.3, 1.3), 0.0, z + rng.randf_range(-1.3, 1.3))
-			var keep := rng.randf() < 0.24
-			var pine := rng.randf() < 0.5
+			var keep := rng.randf() < float(theme.get("tree_keep", 0.24))
+			var pine: bool = rng.randf() < 0.5 or theme.get("snow", false)
 			var sc := rng.randf_range(1.15, 1.65)
 			z += step
 			if not keep or _road_distance(p) < clear + 0.25 * sc or p.distance_to(Vector3(gate_pos.x, 0.0, gate_pos.z)) < 4.0:
 				continue
-			add_tree(p, pine, sc)
+			add_tree(p, pine, sc, theme.get("snow", false))
 		x += step
 
-	# Cones: just inside the apexes of the tight corners, and a pair beside the
-	# east straight (the drive test runs through those).
+
+
+## Cones: just inside the apexes of the tight corners, and on track 1 a pair
+## beside the east straight (the drive test runs through those).
+func _build_cones(theme: Dictionary) -> void:
+	if not theme.get("cones", true):
+		return
 	var edge := Track.ROAD_HALF_WIDTH + Track.KERB_WIDTH + 0.35
 	for c in corner_apexes(1.0 / 6.5):
 		var s: float = c[0]
@@ -189,8 +250,167 @@ func _build_props() -> void:
 		for ds: float in [-0.5, 0.5]:
 			var xf := track.pose_at(s + ds, side * edge)
 			add_cone(xf.origin)
-	for s: float in CONE_PAIR_S:
-		add_cone(track.pose_at(s, -edge).origin)
+	if track_def.id == Tracks.FIGURE_EIGHT.id:
+		for s: float in CONE_PAIR_S:
+			add_cone(track.pose_at(s, -edge).origin)
+
+
+## Arena markers (theme "markers"): tyre stacks round the outside of the flat
+## corners and at the ends of the straights, hay bales beside the jumps. They
+## stand just off the berms and are solid (a car sliding wide bumps them).
+func _build_markers(theme: Dictionary) -> void:
+	if theme.get("poles", false) or theme.get("snowbanks", false):
+		_build_snow_markers(theme)
+	if not theme.get("markers", false):
+		return
+	var h := Track.ROAD_HALF_WIDTH
+	# Flat corners (no banking): stacks round the outside, one inside at the apex.
+	for c in corner_apexes(1.0 / 7.0):
+		var s: float = c[0]
+		var side: float = c[1]
+		if track.bank_at(s) != 0.0:
+			continue
+		var span := 6.0
+		var ds := -span
+		while ds <= span:
+			add_tyre_stack(track.pose_at(s + ds, -side * (h + 0.85)).origin)
+			ds += 1.0
+		add_tyre_stack(track.pose_at(s, side * (h + 0.75)).origin)
+	# Jumps: bales along both sides of each raised stretch.
+	var s2 := 0.0
+	while s2 < track.length:
+		if track.structure_at(s2) == 1 and track.bank_at(s2) == 0.0 and track.height_at(s2) > 0.05:
+			for u: float in [-1.0, 1.0]:
+				add_hay_bale(track.pose_at(s2, u * (h + 1.3 + track.height_at(s2) * 1.2 + 0.35)))
+		s2 += 1.6
+
+
+## Mountain markers: striped poles along both edges of the low (unrailed)
+## stretches, and snow banks (visual only, so a car sliding wide is not caught
+## on them) round the outside of the flat corners.
+func _build_snow_markers(theme: Dictionary) -> void:
+	var h := Track.ROAD_HALF_WIDTH
+	if theme.get("poles", false):
+		var s := 2.0
+		while s < track.length:
+			if track.structure_at(s) == 0:
+				for u: float in [-1.0, 1.0]:
+					add_pole(track.pose_at(s, u * (h + Track.KERB_WIDTH + 0.35)).origin)
+			s += 6.0
+	if theme.get("snowbanks", false):
+		for c in corner_apexes(1.0 / 9.0):
+			var sc: float = c[0]
+			var side: float = c[1]
+			if track.structure_at(sc) != 0:
+				continue
+			var ds := -5.0
+			while ds <= 5.0:
+				var xf := track.pose_at(sc + ds, -side * (h + Track.KERB_WIDTH + 0.75))
+				add_snowbank(xf, 0.9 - absf(ds) * 0.08)
+				ds += 1.2
+
+
+func add_pole(pos: Vector3) -> void:
+	var root := Node3D.new()
+	root.position = Vector3(pos.x, Track.GROUND_Y, pos.z)
+	for k in 4:
+		var mi := MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = 0.04
+		cm.bottom_radius = 0.04
+		cm.height = 0.22
+		cm.radial_segments = 6
+		cm.rings = 1
+		mi.mesh = cm
+		mi.material_override = _marker_material(Color("e8642c") if k % 2 == 1 else Color("23232a"))
+		mi.position = Vector3(0.0, 0.11 + 0.22 * k, 0.0)
+		root.add_child(mi)
+	props.add_child(root)
+
+
+func add_snowbank(xf: Transform3D, size: float) -> void:
+	var mi := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = 0.5
+	sm.height = 0.5
+	sm.radial_segments = 10
+	sm.rings = 4
+	mi.mesh = sm
+	mi.material_override = _marker_material(Color("dfe6f0"))
+	var fwd := -xf.basis.z
+	fwd.y = 0.0
+	mi.transform = Transform3D(Basis.looking_at(fwd.normalized(), Vector3.UP).scaled(Vector3(0.9 * size, 0.55 * size, 1.6 * size)),
+		Vector3(xf.origin.x, Track.GROUND_Y, xf.origin.z))
+	props.add_child(mi)
+
+
+const TYRE_RADIUS: float = 0.2
+const TYRE_HEIGHT: float = 0.11
+
+
+## Three tyres stacked (a solid cylinder to bump into).
+func add_tyre_stack(pos: Vector3) -> void:
+	var body := StaticBody3D.new()
+	body.collision_layer = Track.LAYER_PROPS
+	body.collision_mask = 0
+	body.position = Vector3(pos.x, Track.GROUND_Y, pos.z)
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = TYRE_RADIUS
+	mesh.bottom_radius = TYRE_RADIUS
+	mesh.height = TYRE_HEIGHT * 0.92
+	mesh.radial_segments = 12
+	mesh.rings = 1
+	for i in 3:
+		var mi := MeshInstance3D.new()
+		mi.mesh = mesh
+		mi.material_override = _marker_material(Color("2c2c33") if i != 1 else Color("c8c2b0"))
+		mi.position = Vector3(0.0, TYRE_HEIGHT * (i + 0.5), 0.0)
+		body.add_child(mi)
+	var cs := CollisionShape3D.new()
+	var shape := CylinderShape3D.new()
+	shape.radius = TYRE_RADIUS
+	shape.height = TYRE_HEIGHT * 3.0
+	cs.shape = shape
+	cs.position = Vector3(0.0, TYRE_HEIGHT * 1.5, 0.0)
+	body.add_child(cs)
+	props.add_child(body)
+
+
+## A straw bale, long side along the road.
+func add_hay_bale(xf: Transform3D) -> void:
+	var body := StaticBody3D.new()
+	body.collision_layer = Track.LAYER_PROPS
+	body.collision_mask = 0
+	var fwd := -xf.basis.z
+	fwd.y = 0.0
+	body.transform = Transform3D(Basis.looking_at(fwd.normalized(), Vector3.UP), Vector3(xf.origin.x, Track.GROUND_Y, xf.origin.z))
+	var size := Vector3(0.36, 0.3, 0.7)
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = size
+	mi.mesh = bm
+	mi.material_override = _marker_material(Color("d4b25a"))
+	mi.position = Vector3(0.0, size.y * 0.5, 0.0)
+	body.add_child(mi)
+	var cs := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = size
+	cs.shape = shape
+	cs.position = mi.position
+	body.add_child(cs)
+	props.add_child(body)
+
+
+var _marker_materials: Dictionary = {}
+
+
+func _marker_material(c: Color) -> StandardMaterial3D:
+	if not _marker_materials.has(c):
+		var m := StandardMaterial3D.new()
+		m.albedo_color = c
+		m.roughness = 1.0
+		_marker_materials[c] = m
+	return _marker_materials[c]
 
 
 ## Arc lengths along the east straight of the two cones beside it (outside, left).

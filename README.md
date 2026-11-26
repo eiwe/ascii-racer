@@ -22,16 +22,19 @@ It is a prototype, in the spirit of 90s top-down racers, built with [Godot 4.7](
 - **Nitro**: a 1.5-second tank on Left Shift or a left-stick click, with an on-screen bar. Burning it in a corner is a mistake you can make.
 - **A limit worth respecting**: the tight corners (the hairpin, the two 90-degree right-handers) need real braking, and overdriving one runs you wide. The default `balanced` setup is planted; the `drift` preset is the one whose rear steps out on the throttle or a lift, where a countersteer can catch it and ignoring it spins you.
 - **Four handling presets** (`balanced`, `drift`, `grip`, `heavy`) plus a live tuning panel; your own setup saves as `custom`.
-- **One circuit**: a 147-unit figure-of-eight with a bridge, a table-top jump, sweepers and a hairpin. Lap timer with current, last and best lap (the first lap from the lights is a standing start; without the lights, as in the scripted tests, it starts at the line).
-- **Two cameras**: fixed isometric (default) and a rear chase view with right-stick look-around.
-- **Seven lighting modes** on keys `1`–`7`: a sunset sky with clouds (the default), night with headlights, the classic look, a low golden-hour sun with long shadows, hatched shadows, a glint on the car, and a moving sun.
+- **Circuits**: Figure Eight, a 147-unit figure-of-eight with a bridge, a table-top jump, sweepers and a hairpin, and Dust Bowl, a 169-unit dirt arena with two steep banked turns (26° and 24°) behind tall tyre walls, a table-top, a double and a step-down, and a tight flat hairpin where the dirt makes you slide, and Frost Pass, a 170-unit asphalt mountain road that climbs through two switchback hairpins, crests and runs down a long sweeper, with snow on about a third of the lap: a full-width snowy straight into the first switchback, the snow-covered drift corner, the inside two-thirds of the sweeper (the short way on snow or the long way on asphalt) and strips along the edges. Lap timer with current, last and best lap (the first lap from the lights is a standing start; without the lights, as in the scripted tests, it starts at the line); the best lap is kept per circuit.
+- **Level select**: after the reel, pick the circuit on a large live preview that sways gently round it, its time of day (morning, noon or night) and the opponent.
+- **Dirt**: less grip than asphalt, and a tyre that lets go early and gently and keeps most of its grip while sliding, so the car drifts readily and holds a slide on the throttle; more drag off the throttle, longer stops, a little wheelspin. Dust kicks up behind a sliding or spinning car, and the tyres crunch on gravel instead of squealing.
+- **Snow** (packed): far less grip than dirt with a broad, forgiving limit; slides hold and can be steered, stops take about half as long again as on asphalt, lifting off does not snap the car round, and a car entering a snow corner too fast runs wide rather than spinning. With one side on snow and the other on asphalt the brakes balance to the lower grip, so braking does not pull the car round. White spray from sliding wheels, and a soft crunch and hiss instead of the squeal.
+- **Two cameras**: fixed isometric (default) and a rear chase view with right-stick look-around. Switching between them is a short eased camera move (a dolly zoom), not a cut.
+- **Nine lighting modes** on keys `1`–`9`: a sunset sky with clouds (the reel's), night with headlights, the classic look, a low golden-hour sun with long shadows, hatched shadows, a glint on the car, a moving sun, morning and noon.
 - **Night racing** (lighting `2`, experimental): moonlight with the track edges still readable, headlight beams that light the road ahead and throw moving shadows, red tail lamps that brighten under braking, on both cars and in the demo reel, under a sky with a moon and stars.
 - **Isometric zoom that fits the window**: in the default AUTO zoom, a 16:9 or narrower window looks further ahead and zooms out a little, so it shows at least as much road ahead as an ultrawide, with calm, heavily smoothed camera motion. Fixed zoom steps (car centred) are in the pause menu.
 - **F1-style start lights**: every start from the grid (from the reel, a restart, or turning the opponent on) runs five red lights with a beep each, a random hold, then lights out with a higher beep. The cars are held until then (the throttle still revs the engine), the race music and the lap timer start at lights out, and the opponent reacts after about 0.45 s at level 1 down to about 0.15 s at level 5.
 - **An AI opponent**: a red speedster that starts beside you on the grid and laps freely, at a difficulty from 1 to 5 (or off) set in the pause menu. It drives the same car with the same `balanced` setup as you, with no catch-up: higher levels simply drive closer to the limit, and levels 4 and 5 drift the hairpin and use nitro. Contact is solid, and your position and the gap in seconds show at the bottom left.
 - **Sound and music**: a recorded petrol engine with a simulated gearbox, tyre squeal, landings, impacts and nitro, plus menu and race music. A pause menu on `Esc` has volume controls that are saved between runs.
 - **Gamepad support** with analogue steering and triggers, and rumble.
-- **Demo reel**: the game opens on a self-driving reel shot from changing camera angles, with a logo intro made of characters. Press anything to play.
+- **Demo reel**: the game opens on a self-driving reel shot from changing camera angles, with a logo intro made of characters. Press anything for the level select.
 
 ## Download and play
 
@@ -59,13 +62,14 @@ It runs from any static web host without special headers (it is the single-threa
 - **The picture is close but not identical.** The Compatibility renderer lights scenes differently (it adds shadowed lights in sRGB space, uses simpler diffuse shading and its own light falloff), so the lighting modes are rebalanced for it. Classic and the isometric views match closely; night and the chase view's far distance differ most. The normal and depth information the character shapes come from is drawn a different way, with the same result.
 - **Sound, keyboard and gamepad work** in Chrome and in a Firefox-based browser (tested by the owner). Gamepad rumble in the browser has not been checked.
 - **A start screen first.** Browsers keep a page silent until it is clicked or a key is pressed, so the web build opens on the logo with "click or press any key"; that click or key switches the sound on and starts the demo reel and its music from the top (it does not start a race). A gamepad button cannot switch sound on in a browser, so the screen asks for a click or key. If the browser already allows sound, the screen is skipped.
-- **High-density displays**: characters are sized for the display's pixel density (16 px on a 2x display such as a Retina Mac, the normal 9 px on a 1x display, in between for 1.25x and 1.5x), and so is the HUD text; this follows browser zoom and moves between monitors.
-- **Settings are kept in the browser**: the volumes, mute, opponent level, zoom, glyph size and the saved `custom` handling are stored by the game in the browser's site storage (IndexedDB) and, as a backup that is written the moment you save, in its localStorage. Clearing the site's data resets them.
-- **Night looks a little different** (the headlight pool and the kerbs inside it); it is fully playable.
+- **High-density displays**: characters are a little larger than on the desktop builds and sized for the display's pixel density (12 px on a 1x display, 22 px on a 2x display such as a Retina Mac, in between for 1.25x and 1.5x, 33 px at 3x), and so is the HUD text; on a dense screen that reports 1x (a 4K monitor at 100 %) they are at least 1/120 of the screen height (18 px on 4K). This follows browser zoom and moves between monitors.
+- **Settings are kept in the browser**: the volumes, mute, selected circuit with its time of day, opponent level and best lap, zoom, glyph size and the saved `custom` handling are stored by the game in the browser's site storage (IndexedDB) and, as a backup that is written the moment you save, in its localStorage. Clearing the site's data resets them.
+- **No glint on the car**: the lighting modes with the car glint (sunset, glint, morning, noon) draw the car without it in the browser. With it, WebGL turned the teal car lime.
+- **Night looks a little different** (the headlight pool and the kerbs inside it); it is fully playable. (Up to 0.4.1 night was drawn with fill characters only in the browser: the shadowed headlights emptied the normal and depth information the character shapes come from. Fixed: no light reaches the g-buffer twins.)
 - **No Quit** in the menu (close the tab), no command-line options, and settings and custom tuning are kept in the browser's storage for the site.
 - **Esc** opens the menu and also leaves the browser's fullscreen.
 
-The hosted copy at [eiwe.github.io/ascii-racer](https://eiwe.github.io/ascii-racer/) is the `gh-pages` branch: `tools/deploy_pages.sh` replaces it with the current `build/web/` as a single fresh commit (so the large engine file does not pile up in history), and `tools/release.sh --publish` runs it after creating a release.
+The hosted copy at [eiwe.github.io/ascii-racer](https://eiwe.github.io/ascii-racer/) is the `gh-pages` branch: `tools/deploy_pages.sh` rewrites it as a single fresh commit (so the large engine file does not pile up in history): a root deploy replaces the build at the top of the site and keeps preview subdirectories, `--subdir <name>` publishes a preview into `<name>/` (for example `https://eiwe.github.io/ascii-racer/tracks/`) and keeps everything else, `--remove-subdir <name>` takes one away. `tools/release.sh --publish` runs the root deploy after creating a release. The exported page loads its files by relative paths, so it works from a subdirectory.
 
 ### First launch on macOS
 
@@ -88,7 +92,19 @@ On macOS 14 and earlier you can also right-click the app and choose Open. That s
 
 ## Controls
 
-The game opens on the demo reel. Press any key, button or trigger to start driving. Before the first start lights a note under the start gantry shows, for five seconds, the key (and the pad button, with a gamepad connected) that switches between the isometric and chase cameras; it then fades and the same shortcut stays in the small legend in the top left corner, next to the debug menu's. `Esc` (or Start on a gamepad) opens the menu: resume, restart, the opponent's difficulty (off or 1 to 5, applied when the menu closes), the isometric zoom (AUTO, or a fixed 0.85 to 1.50 times the base framing), volume sliders for master, music and effects, a sound check that plays each sound on its own, return to the title, and quit. The difficulty, zoom, volumes and mute, the glyph size you set with `-` / `=`, and a saved `custom` handling preset are kept between runs; the glyph size is kept at the same physical size if you move to a display of a different density, and stepping back to the default size forgets it. Not kept between runs: the lighting mode and sun position, the camera (isometric or chase) and the chase distance, the base isometric zoom (`,` `.`), squeeze, colour mode, background tint, grid snap, rumble, the debug HUD, and the selected handling preset (only `custom` is saved, with F5). Opening the menu during the start lights pauses them; they carry on where they were when it closes (Restart begins them again). The reset key does nothing under the lights.
+The game opens on the demo reel. Press any key, button or trigger for the level select, then Enter, Space or pad A to start driving (see [Level select](#level-select)). Before the first start lights a note under the start gantry shows, for five seconds, the key (and the pad button, with a gamepad connected) that switches between the isometric and chase cameras; it then fades and the same shortcut stays in the small legend in the top left corner, next to the debug menu's. `Esc` (or Start on a gamepad) opens the menu: resume, restart, change track (back to the level select), the opponent's difficulty on this circuit (off or 1 to 5, applied when the menu closes), the isometric zoom (AUTO, or a fixed 0.85 to 1.50 times the base framing), volume sliders for master, music and effects, a sound check that plays each sound on its own, return to the title, and quit. The selected circuit, each circuit's time of day, opponent difficulty and best lap, the zoom, volumes and mute, the glyph size you set with `-` / `=`, and a saved `custom` handling preset are kept between runs; the glyph size is kept at the same physical size if you move to a display of a different density, and stepping back to the default size forgets it. Not kept between runs: a lighting mode picked with the number keys and the sun position, the camera (isometric or chase) and the chase distance, the base isometric zoom (`,` `.`), squeeze, colour mode, background tint, grid snap, rumble, the debug HUD, and the selected handling preset (only `custom` is saved, with F5). Opening the menu during the start lights pauses them; they carry on where they were when it closes (Restart begins them again). The reset key does nothing under the lights.
+
+### Level select
+
+| Action | Keyboard | Gamepad |
+|---|---|---|
+| Previous / next circuit (preview row) | Left / right, or A / D | D-pad or left stick |
+| Move between the preview, time of day, opponent and START | Up / down, or W / S | D-pad or left stick |
+| Change the time of day or opponent (on its row) | Left / right | D-pad or left stick |
+| Start | Enter or Space | A or Start |
+| Back to the reel | Esc | B or Back |
+
+The arrows wrap round the circuits. In the browser the arrows, the rows and START can also be clicked. The title music carries on through the level select; the race music starts at lights out. At the top: the circuit's name, what it is, its length and your best lap there. The preview is a map: it is fitted into the space between the title and the rows, from the heading that shows the circuit largest on this screen shape, and lit brighter than a race so the track reads at any time of day (the sun's colour and direction still tell the times apart). The focused item is drawn in yellow on a highlighted plate; with the preview focused the arrows pulse and corner marks frame it.
 
 ### Driving
 
@@ -123,13 +139,15 @@ The debug HUD (speed, lap times, telemetry, render settings and every key) start
 
 While the tuning panel is open the arrow keys navigate it, so drive with WASD.
 
+Steering keys turn the wheels in gradually, and more slowly at speed: from a third of top speed up, the turn-in rate falls to `key rate fast` (0.45) of `key steer rate` at top speed, so full lock takes about 0.17 s when slow and 0.36 s flat out (never longer than 0.4 s). A tap at speed is a small correction rather than a snap to full lock. Letting go, reversing through centre and counter-steering into a slide stay at the full rate. The stick and the scripted drivers (opponent, demo reel, autopilot) are not slowed.
+
 ![The tuning panel and telemetry](docs/images/tuning-panel.png)
 
 ### Rendering
 
 | Key | Action |
 |---|---|
-| `1`–`7` | Lighting mode: sunset, night, classic, low sun, hatched, glint, sweep |
+| `1`–`9` | Lighting mode: sunset, night, classic, low sun, hatched, glint, sweep, morning, noon |
 | `J` / `L` | Swing the sun round (the moon at night; not in classic) |
 | `I` / `K` | Raise / lower the sun (the moon at night; not in classic) |
 | `[` / `]` | Squeeze characters together / apart (both axes) |
@@ -158,8 +176,9 @@ Useful options, passed after `--`:
 
 | Command | What it does |
 |---|---|
-| `godot --path . -- --play` | Skip the demo reel and start on the grid. |
-| `godot --path . -- --lighting=low-sun` | Start in a lighting mode (name or number 1–7; default 1 sunset). |
+| `godot --path . -- --play` | Skip the demo reel and the level select and start on the grid of the saved circuit in its saved time of day. |
+| `godot --path . -- --play --track=dust_bowl --time=noon` | The same on a given circuit (`figure_eight`, `dust_bowl`) and time of day (`morning`, `noon`, `night`). |
+| `godot --path . -- --lighting=low-sun` | Start in a lighting mode (name or number 1–9; overrides the time of day). |
 | `godot --path . -- --preset=drift` | Start on a handling preset (`balanced`, `drift`, `grip`, `heavy`). |
 | `godot --path . -- --tune=top_speed=9,grip_road=1.4` | Override car tunables for one run. |
 | `godot --path . res://demo/demo.tscn` | The renderer demo: a small diorama with a scripted car. |
@@ -179,7 +198,22 @@ The glyph atlas is built at runtime from the font, so glyph size can change live
 
 **Choosing the glyph.** Each cell takes six brightness samples in a 2 × 3 grid and picks the glyph whose shape vector is nearest, so the character follows the structure inside the cell: a diagonal edge becomes `/`, a bright lower half becomes `_`. Cells with no structure fall back to a brightness ramp sorted by ink coverage. Earlier versions offered four other methods (plain ramp, edge lines, overstrike, hatch by surface direction); they were removed in 0.3 in favour of this one.
 
-All settings are on the `AsciiSettings` resource (`ascii/ascii_settings.gd`). The defaults are 9 px glyphs, squeeze 0.8 × 0.8, full colour and background tint 0.3. On a Retina Mac the game starts at 20 px glyphs instead, because 9 px is too small to read at that pixel density.
+All settings are on the `AsciiSettings` resource (`ascii/ascii_settings.gd`). The defaults are 9 px glyphs, squeeze 0.8 × 0.8, full colour and background tint 0.3.
+
+**Default glyph size.** 9 px glyphs are too small to read as characters on a dense screen, so the game starts at a size for the display (`Game.glyph_default_for`). Two things decide it:
+
+- **The display scale** (`AsciiControls.display_scale()`): the device pixel ratio in a browser, the Retina scale on macOS, Windows' scaling setting, the output scale on Wayland; 1 on X11 and anything under 1.2. The desktop default is 9 px at 1x and 20 px at 2x, the web's 12 and 22, interpolated between and in proportion above.
+- **A row limit** that does not depend on the reported scale: the default never puts more than 160 text rows (web: 120) on the screen's full height in device pixels. This covers dense screens that report 1x, such as a 4K monitor at 100 % (14 px on the desktop, 18 px on the web).
+
+| Display | Desktop | Web |
+|---|---|---|
+| 1080p or 1440p, 1x | 9 px | 12 px |
+| 1080p laptop at 125 % / 150 % | 12 / 15 px | 15 / 17 px |
+| 4K at 100 % / 150 % / 200 % | 14 / 15 / 20 px | 18 / 18 / 22 px |
+| Retina MacBook (2x) | 20 px | 22 px |
+| 3x screen | 30 px | 33 px |
+
+The debug HUD (`H`) shows the size in a display-independent form for comparing screens: `glyph 22 px (11.0 logical, 89 rows/screen)`, where logical is px over the display scale and rows/screen is the screen height in device pixels over px. `-` and `=` change it; the choice is saved and kept the same physical size on another display, and stepping back to the default forgets it, so the default can follow the display again. The drive test's `glyph_table` scenario prints the default for a list of displays. Scripted runs keep 9 px (20 px at 2x) so their output stays comparable.
 
 ### Lighting modes
 
@@ -194,6 +228,10 @@ Lighting is defined as data in `lighting/lighting.gd`: each mode is a table of s
 | `5` | hatched | Low sun, with shadow drawn as its own texture: sparse `/` hatching in a cool ink and a line glyph along the shadow edge. Uses an extra lighting-only render pass, which exists only while this mode is on. |
 | `6` | glint | Low sun, plus a small highlight that slides over the car's bodywork and a cool rim light. |
 | `7` | sweep | Low sun that circles once a minute, so the shadows swing round. |
+| `8` | morning | The level select's default time of day. A low warm sun from the east with long shadows, a cool blue fill and a dawn sky (deep blue overhead, peach at the horizon). |
+| `9` | noon | A high, near-white sun with short shadows under a blue sky with white cumulus; the sun and fill are kept moderate so the road and kerbs still draw as characters instead of washing out. |
+
+The level select's times of day are modes `8` (morning), `9` (noon) and `2` (night). A circuit can adjust them in its data (`time_tweaks`: any key of the mode's table, such as the sun's direction or colour). The demo reel always runs on Figure Eight in sunset.
 
 Light shafts were tried and dropped: Godot's volumetric fog does not work with the orthographic camera, and in the chase view the shafts did not survive the conversion to characters.
 
@@ -202,7 +240,7 @@ Light shafts were tried and dropped: Godot's volumetric fog does not work with t
 | Path | Contents |
 |---|---|
 | `ascii/` | The renderer: `ascii_renderer.gd`, `ascii_settings.gd`, `glyph_atlas.gd`, `ascii_overlay.gd` (the overlay cell layer), `ascii_controls.gd` (render keys and HUD panel), `shaders/`. |
-| `game/` | The game: car physics and nitro (`car.gd`), presets and save file (`car_tuning.gd`), tuning panel, track generator (`track.gd`), cameras, lap timer, rumble, the nitro bar (`nitro_hud.gd`), the pause menu (`pause_menu.gd`), the start lights (`race_start.gd`), the AI opponent (`opponent.gd`: the red car, its recovery and the race standing; `opponent_driver.gd`: its driving per level; `shaders/opponent_paint.gdshader`: its red paint), sound (`audio/`: the sample table, mixer, music looping and the car's engine, tyre and impact sounds), and the scripted drive test. The demo reel lives here too: `attract.gd` (reel state), `logo.gd` (logo, title and prompt), `demo_driver.gd` (the self-driving car), `shot_director.gd` and `cine_camera.gd` (the camera shots). |
+| `game/` | The game: car physics and nitro (`car.gd`), presets and save file (`car_tuning.gd`), tuning panel, the circuits as data (`tracks.gd`), driving surfaces (`surfaces.gd`), track generator (`track.gd`), the level select (`level_select.gd`), cameras and the move between them (`view_blend.gd`), lap timer, rumble, the nitro bar (`nitro_hud.gd`), the pause menu (`pause_menu.gd`), the start lights (`race_start.gd`), the AI opponent (`opponent.gd`: the red car, its recovery and the race standing; `opponent_driver.gd`: its driving per level; `shaders/opponent_paint.gdshader`: its red paint), sound (`audio/`: the sample table, mixer, music looping and the car's engine, tyre and impact sounds), and the scripted drive test. The demo reel lives here too: `attract.gd` (reel state), `logo.gd` (logo, title and prompt), `demo_driver.gd` (the self-driving car), `shot_director.gd` and `cine_camera.gd` (the camera shots). |
 | `lighting/` | The lighting modes (`lighting.gd`), the car glint shader, the sunset and night skies (`sunset_sky.gdshader`, `night_sky.gdshader`) and the cars' night lights (`car_lights.gd`). |
 | `demo/` | The renderer demo scene and its screenshot-capture mode. |
 | `assets/` | Car and prop models, fonts, and `audio/` (music, sound effects, the sample table `sounds.cfg` and `CREDITS.md`). |
@@ -211,11 +249,22 @@ Light shafts were tried and dropped: Godot's volumetric fog does not work with t
 
 ### Editing the track
 
-The circuit is generated from data at the top of `game/track.gd`, not built from model pieces:
+Circuits are data in `game/tracks.gd` (one dictionary per circuit, listed in `Tracks.ALL`); `game/track.gd` generates the road, kerbs, walls, bridge and colliders from it, and the world rebuilds when the circuit changes. A definition has:
 
-- `LAYOUT` is a list of straights `["S", length]` and arcs `["A", radius, degrees]` (positive turns right) walked from the start. Two straights have length `-1` and are solved so the loop closes.
-- `ELEVATION` raises ranges of the centre line for the bridge ramps, the bridge deck and the jump.
-- Road width, kerb size, wall height and colours are constants in the same file.
+- `layout`: straights `["S", length]` and arcs `["A", radius, degrees]` (positive turns right) walked from `origin` at `start_heading_deg`. Two straights have length `-1` and are solved so the loop closes; they must not be parallel.
+- `elevation`: ranges of raised road `{from, to, rise: [y0, y1], shape}` with shapes `ease`, `kick` (a jump's lip) and `flat`; `deck` marks a bridge span (only circuits with a bridge get the see-through halo) and `jump` marks a jump, which the AI drivers take flat out. A table-top, a double and a step-down are sequences of these.
+- `bank`: banked ranges `{from, to, deg, ease_in, ease_out}`; the outside of the turn rises by `deg`, easing in and out over the given lengths. Banked road is built raised, with walls, so its low edge sits at ground level; the road, its edges and the walls roll together.
+- `surface` and `patches`: the road's surface and patches of another one, full width or part width (`u: [from, to]` across the road, negative to the left). Surfaces are defined in `game/surfaces.gd`: grip, how early and how softly the tyre lets go, grip left while sliding, drag, colour and tyre-sound family. Asphalt and the off-track ground use the car's own tunables, so the handling on Figure Eight is unchanged. Each wheel reads the surface under it.
+- Jumps can carry `clear_speed` and `roll_speed`: the take-off speeds the drivers plan for (the careful levels roll). Without them, as on Figure Eight, the drivers take the jump flat out.
+- `start_s`, `checkpoints`, `kerbs`, `theme` (trees, cones, the start gate; `arena` for the dirt style below, `markers` for tyre stacks and hay bales, `tree_keep` for how many trees), `time_tweaks`, `tests` (drive-test places), and `name` and `description` for the level select.
+
+Dust Bowl is turned (`start_heading_deg` 180) so the isometric camera, which looks from the +x +z side, sits in the one quadrant neither banked turn's outside faces: it looks down into both bowls rather than at the back of the walls. The `bank_iso` scenario checks it.
+
+Patches can carry `taper`: over that length at each end the snow grows across the road from one side, a little irregularly, so the ends read as drifted snow. Surfaces marked `bright` (snow) are drawn without the track's darkening tint, so snow on the road outshines the snowfield beside it. A `mountain` theme keeps raised road out of the halo (only its 0.55-high guard rails get it) and puts striped poles and snow banks along the low stretches; `snow` caps the pines.
+
+The arena style (Dust Bowl) has no kerbs: earth berms and a darker band mark the road edges, jumps are earth mounds with drivable sides, and banked turns have a tall tyre wall on the outside, square to the road and growing with the banking, and a drivable apron sloping down to the infield on the inside. Banked road is lifted so its low edge stays on the ground; the lift eases in and out over the bank's `ease_in` / `ease_out`, and an ease shorter than about 8 makes the end of a banked turn a launch ramp at speed.
+
+The AI drivers (the reel's and the opponent's) plan their line and speeds from this data, including the grip of the surface and the extra speed a banked turn allows. Road width, kerb size, wall height and colours are constants in `track.gd`.
 
 The demo reel's camera shots are defined relative to the track in `game/shot_director.gd` (distance along the centre line, sideways offset, height), so they follow layout changes.
 
@@ -231,7 +280,7 @@ Every tunable is an exported property on `Car` (`game/car.gd`), grouped by Chass
 
 ### Editing the sound
 
-`assets/audio/sounds.cfg` maps each role (engine loops with their rpm, tyre squeal and skid, landing, kerb, impacts, nitro, the start-light beeps, menu and race music) to a file and a gain, so swapping a sound is a one-line change. The effect files are produced from their source recordings by `tools/prepare_audio.py`, which records the exact ranges used (the two start beeps are synthesised tones: `tools/prepare_audio.py --beeps` rewrites just those); the sources and licences are listed in `assets/audio/CREDITS.md`. The engine's gearbox exists only in the sound: it makes the revs rise and drop through five gears and does not affect the physics.
+`assets/audio/sounds.cfg` maps each role (engine loops with their rpm, tyre squeal and skid, landing, kerb, impacts, nitro, the start-light beeps, menu and race music) to a file and a gain, so swapping a sound is a one-line change. The effect files are produced from their source recordings by `tools/prepare_audio.py`, which records the exact ranges used (the two start beeps are synthesised tones: `tools/prepare_audio.py --beeps` rewrites just those; the two loose-surface loops come from one CC0 gravel recording: `tools/prepare_audio.py --dirt <1284.flac>` rebuilds just those); the sources and licences are listed in `assets/audio/CREDITS.md`. The engine's gearbox exists only in the sound: it makes the revs rise and drop through five gears and does not affect the physics.
 
 ## Testing
 
@@ -244,13 +293,17 @@ godot --path . --fixed-fps 120 -- --drivetest=/tmp/drive
 godot --path . --fixed-fps 120 -- --drivetest=/tmp/drive --preset=heavy --dtonly=spawn,jump,lap
 ```
 
-It writes `results.txt` and PNGs to the given folder and quits. It covers top speed, braking, each corner's clean speed, behaviour past the limit, the drift, the nitro, the jump, the bridge, kerbs, collisions, reset, pausing, gamepad bindings, the lighting modes, autopilot laps and the demo reel's driver (`--dtonly=demo_laps`).
+`--dtonly=key_steer` measures keyboard steering through real key events at top speed, half speed and 3.5 u/s: time to full lock, 60 and 120 ms taps, a timed and a feedback lane change, a held corner, and a slide caught with the keys on asphalt, dirt and snow.
+
+It writes `results.txt` and PNGs to the given folder and quits. Unless a scenario changes it, it drives Figure Eight. It covers top speed, braking, each corner's clean speed, behaviour past the limit, the drift, the nitro, the jump, the bridge, kerbs, collisions, reset, pausing, gamepad bindings, the lighting modes, autopilot laps and the demo reel's driver (`--dtonly=demo_laps`).
 
 The opponent has its own scenarios: `opp_laps` (each level alone over a run of laps: lap times, resets, stuck time; `--opplevels=1,5` and `--opplaps=10` narrow it), `opp_block` (your car parked on the racing line and across the hairpin exit), `opp_shove` (a scripted hit), `opp_start` (both cars off the grid together), `opp_menu` (off / on / level changes from the menu, saved setting) and `opp_shots` (screenshots).
 
 Scripted runs (the drive test, `--attracttest`, `--attractshots`, the hero recording) skip the start lights. The `countdown` scenario turns them on: the cars do not move before lights out while the throttle is blipped, nitro cannot be used, the hold differs between starts, the lap timer starts at lights out, the opponent's reaction at levels 1 and 5 and its first corner, pausing and cancelling mid-sequence, no nodes or sound players left behind, and screenshots (two, three and five lamps and just after lights out, in iso and chase, on the Retina grid and at night).
 
 Three more scenarios cover the night lighting, the zoom and the HUD: `night` (screenshots at night where visibility matters, iso and chase: the grid, flat out on the straight, braking for the hairpin, the R6 after the jump, under the bridge, the opponent ahead and behind; `--nightmode=<n>` shoots another mode at the same places), `view_ahead` (road visible ahead of the car along its heading at 16:9, 16:10 and 21:9, standing and flat out, with the fixed 1.00 zoom and with AUTO, the car's size on screen, and how smoothly AUTO's zoom moves over a lap) `hud_shots` (window captures of the minimised HUD's legend and the open HUD over the start lights), `camera_motion` (how calm the isometric camera is over a lap with the reel's driver and with the level-5 opponent, in a 16:9 output, AUTO and fixed: the camera's acceleration and jerk, the car's offset and speed on screen and its direction reversals, also through the hairpin and the esses; `--camtune=<name>=<value>,...` tries other camera settings), `camera_tip` (the camera note before the first lights: when it shows, that Restart and the opponent do not bring it back, dismissing it, screenshots) and `gate` (the finish gate's colliders against its legs, deliberate hits, and contacts over laps of the reel driver and the opponent at every level).
+
+Scenarios for the circuits and the views: `level_select` (every circuit in each time of day at 16:9 and 21:9, how much of the free area the circuit fills over the sway, that the preview never shows sky in the g-buffer, changing circuit through the wipe, each focus state), `tracks` (building Dust Bowl, its surfaces and banked cross-section, laps by the autopilot and the reel's driver, the level-5 opponent, and that switching back and forth leaves no nodes behind), `camera_blend` (frames of the move to the chase view and back, that it never overshoots and ends on the right camera, and a reversal mid-move) and `time_of_day` (each time's lighting mode, the time saved per circuit, a circuit's tweaks, keys 1–9 while driving, and the reel returning to sunset on Figure Eight). `night --nightmode=8` and `--nightmode=9` shoot morning and noon at the night scenario's places. For dirt, snow, Dust Bowl and Frost Pass: `dirt_feel` (the same manoeuvres on the open ground as asphalt, dirt and snow: launch, top speed, coasting, braking, a step steer, a power slide and a handbrake drift, with screenshots of the dust; and the yaw when braking and accelerating with only the left wheels on snow), `dust_tour` (each feature of the `--dttrack` circuit, Dust Bowl by default, in iso and chase in each time of day, from the circuit's `tests.tour`), `bank_iso` (the road ahead through the banked turns from the iso camera, five points per turn, each time of day, 16:9 and 21:9), `abuse` (Dust Bowl: each jump from a crawl to nitro speed, off-centre, crooked and braking in the air, and each banked turn too slow, flat out, on nitro, on the apron and against the wall; a circuit with `tests.abuse`, such as Frost Pass, runs its own list: snow sections too fast, on nitro, braking late, half on snow; whether the car ends up on the road and upright) and `opp_trace` (a quarter-second trace of one opponent level, `--opplevels=n --tracezones=a-b,...`). `--dttrack=<id>` runs the scenarios on another circuit (the opponent scenarios read their places from the circuit's `tests`).
 
 **Audio**: nobody can listen in a scripted run, so the mix is checked by recording it. `--dtonly=audio` under Godot's movie writer saves the game's audio for scripted scenarios, and `tools/measure_audio.py` reports loudness per layer, clipping and the engine's pitch over time.
 
@@ -260,7 +313,7 @@ Three more scenarios cover the night lighting, the zoom and the HUD: `night` (sc
 godot --path . res://demo/demo.tscn -- --capture=/tmp/capture
 ```
 
-**Demo reel**: checks starting from the reel and returning to it with injected input, or saves frames of the logo intro and the reel for review.
+**Demo reel**: checks the way from the reel through the level select into a race and back with injected input (every kind of press opens the level select, Enter or pad A starts, Esc and pad B go back to the reel, the pause menu's CHANGE TRACK and TO TITLE), or saves frames of the logo intro and the reel for review.
 
 ```sh
 godot --path . -- --attracttest=/tmp/attract
@@ -293,7 +346,7 @@ The web build runs on the Compatibility renderer (`rendering/renderer/rendering_
 - **Some sounds come from lossy previews.** The engine's idle and mid-rev loops, the landing thump and the kerb knock were cut from Freesound's public preview files, because the originals need a login. There is no recording above about 2,600 rpm, so the top of the rev range is that loop pitched up. `assets/audio/CREDITS.md` marks which files these are.
 - **The `heavy` preset bottoms out on the jump landing.**
 - **The opponent is a rival on the road, not yet a race.** There is a start, but no lap count, finish or results, and no jump-start penalty (the car is simply held until lights out): both cars lap freely after the lights. Its engine is quieter and fades with distance but is not panned left or right, and only its engine is heard (no tyre or nitro sounds of its own).
-- **The Retina default is new in 0.2.** On a Retina Mac the game now starts with larger glyphs and HUD text. If the characters still look too small or too large, adjust them with `-` and `=`.
+- **The display-dependent default is new in 0.5** (Retina Mac since 0.2). The display scale is read on Windows and Wayland now too, which also scales the HUD and tuning panel text there; on X11 only the row limit applies. If the characters look too small or too large, adjust them with `-` and `=`.
 - **The Windows build has only been run under Wine**, not on a Windows PC.
 - **The web build is experimental.** It looks close to the desktop builds but not the same (see [Web build](#web-build)); rumble in the browser is untested.
 - **Glyph flicker.** As the camera moves, glyphs change. Grid snapping (`G`) reduces this for the static world in the isometric view but does not remove it, and it does not apply to the chase view. In the sunset mode it helps less when the isometric view is zoomed out (AUTO in a 16:9 window, or the menu's steps above 1.00): the grid-snap measurement goes from about 1% of cells changing at the base zoom to about 3% under AUTO at 16:9. The other modes are not affected.

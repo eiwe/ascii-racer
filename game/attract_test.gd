@@ -2,10 +2,12 @@
 ## results.txt plus a few screenshots into <dir>, then quits. Run in real time
 ## (no --fixed-fps) so the frame rate it reports is meaningful.
 ##   - fps during the reel
-##   - each kind of press starts the game (key, pad button, trigger, F1) and does
-##     nothing else (Q must not switch the camera, F1 must not open the panel,
-##     A must not hold the handbrake)
+##   - each kind of press opens the level select (key, pad button, trigger, F1)
+##     and does nothing else (Q must not switch the camera, F1 must not open the
+##     panel, A must not hold the handbrake); Enter / pad A there starts the race
 ##   - the game starts on the grid at rest, iso camera, HUD on, overlay off
+##   - in the level select Esc and pad B go back to the reel
+##   - the pause menu's CHANGE TRACK opens the level select from a race
 ##   - Esc opens the pause menu (game paused); its "to title" item returns to
 ##     the reel and the logo plays again
 ##   - in the reel, Esc and pad Start open the menu instead of starting a race,
@@ -70,8 +72,8 @@ func _state() -> String:
 	var car: Car = game.car
 	var grid: Transform3D = game.world.grid_pose()
 	var cam: Camera3D = game.renderer.scene_viewport.get_camera_3d()
-	return "attract %s, player_input %s, car %.2f from the grid at %.2f u/s, handbrake %s, camera %s, chase_view %s, HUD %s, panel open %s, overlay %s, lap started %s, lights %s, held %s, beeping %s" % [
-		game.attract.active, car.player_input, car.global_position.distance_to(grid.origin), car.linear_velocity.length(),
+	return "attract %s, select %s, player_input %s, car %.2f from the grid at %.2f u/s, handbrake %s, camera %s, chase_view %s, HUD %s, panel open %s, overlay %s, lap started %s, lights %s, held %s, beeping %s" % [
+		game.attract.active, game.level_select.active, car.player_input, car.global_position.distance_to(grid.origin), car.linear_velocity.length(),
 		car.handbrake_input, "iso" if cam == game.camera else cam.get_class(), game.chase_view, game.controls.hud.visible,
 		game.panel.is_open, game.renderer.overlay_enabled, game.laps.started,
 		game.race_start.counting, car.freeze, game.race_start._beep.playing or game.race_start._go.playing]
@@ -113,7 +115,21 @@ func _run() -> void:
 		await _wait(0.1)
 		press.call(false)
 		await _wait(0.6)
-		_line("%s starts the game: %s" % [name, _state()])
+		_line("%s opens the level select %s (reel %s)" % [name, game.level_select.active, a.active])
+		if i == 0:
+			await _shot("02b_select.png")
+		# Start from the select with the same kind of device.
+		var pad := name.begins_with("pad") or name.ends_with("trigger")
+		if pad:
+			_button(JOY_BUTTON_A, true)
+			await _wait(0.05)
+			_button(JOY_BUTTON_A, false)
+		else:
+			_key(KEY_ENTER, true)
+			await _wait(0.05)
+			_key(KEY_ENTER, false)
+		await _wait(1.0)
+		_line("  %s starts the race: %s" % ["pad A" if pad else "Enter", _state()])
 		if i == 0:
 			await _shot("03_game.png")
 			# Drive off a little, then Esc back to the reel.
@@ -142,6 +158,63 @@ func _run() -> void:
 			await _wait(1.0)
 			await _shot("04_reel_again.png")
 		await _wait(1.0)
+	# The level select: Esc and pad B go back to the reel.
+	for back: Array in [["Esc", func(p: bool) -> void: _key(KEY_ESCAPE, p)], ["pad B", func(p: bool) -> void: _button(JOY_BUTTON_B, p)]]:
+		_key(KEY_SPACE, true)
+		_key(KEY_SPACE, false)
+		await _wait(1.0)
+		var opened: bool = game.level_select.active
+		(back[1] as Callable).call(true)
+		(back[1] as Callable).call(false)
+		await _wait(1.2)
+		_line("level select: open %s; %s goes back: select %s, reel %s, reel time %.2f s" % [opened, back[0], game.level_select.active, a.active, a._t])
+	# The pause menu's CHANGE TRACK: from a race to the level select, Enter starts again.
+	_key(KEY_ENTER, true)
+	_key(KEY_ENTER, false)
+	await _wait(1.0)
+	_key(KEY_ENTER, true)
+	_key(KEY_ENTER, false)
+	await _wait(1.0)
+	var in_race: bool = not a.active and not game.level_select.active
+	_key(KEY_ESCAPE, true)
+	_key(KEY_ESCAPE, false)
+	await _wait(0.3)
+	var pm: PauseMenu = game.pause_menu
+	var tries := 0
+	while PauseMenu.LABELS[pm.items[pm.selected]] != "CHANGE TRACK" and tries < 20:
+		_key(KEY_DOWN, true)
+		_key(KEY_DOWN, false)
+		await _wait(0.05)
+		tries += 1
+	_key(KEY_ENTER, true)
+	_key(KEY_ENTER, false)
+	await _wait(1.0)
+	var sel_open: bool = game.level_select.active
+	await _shot("06_change_track.png")
+	# The next circuit, at noon.
+	_key(KEY_RIGHT, true)
+	_key(KEY_RIGHT, false)
+	await _wait(1.0)
+	_key(KEY_DOWN, true)
+	_key(KEY_DOWN, false)
+	_key(KEY_RIGHT, true)
+	_key(KEY_RIGHT, false)
+	await _wait(0.3)
+	_key(KEY_ENTER, true)
+	_key(KEY_ENTER, false)
+	await _wait(1.0)
+	_line("CHANGE TRACK: in a race %s, menu item found %s, select open %s (paused %s); next circuit at noon, Enter: %s; racing on %s in %s" % [in_race, tries < 20, sel_open, get_tree().paused, _state(), game.world.track_def.id, game.lighting.mode_name()])
+	_key(KEY_ESCAPE, true)
+	_key(KEY_ESCAPE, false)
+	await _wait(0.3)
+	for k in 2:
+		_key(KEY_UP, true)
+		_key(KEY_UP, false)
+		await _wait(0.05)
+	_key(KEY_ENTER, true)
+	_key(KEY_ENTER, false)
+	await _wait(1.5)
+	_line("  to title again: reel %s, on %s in %s (the reel's are figure_eight, sunset)" % [a.active, game.world.track_def.id, game.lighting.mode_name()])
 	# In the reel: Esc opens the menu (no race), Esc closes it; pad Start opens,
 	# B closes; M toggles the mute without starting a race.
 	var menu2: PauseMenu = game.pause_menu

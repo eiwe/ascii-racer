@@ -56,7 +56,7 @@ func _physics_process(_delta: float) -> void:
 	while d < 10.0:
 		var k := track.max_curvature(progress + d, 0.5)
 		if k > 0.0:
-			var vc := sqrt(lateral_accel * grip / k)
+			var vc := sqrt(track.corner_accel(lateral_accel * grip, progress + d) / k)
 			want = minf(want, sqrt(vc * vc + 2.0 * brake_accel * d))
 		d += 0.5
 	car.throttle_input = clampf((want - v) * 2.0, 0.0, 1.0)

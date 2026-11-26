@@ -225,6 +225,11 @@ var nitro_enabled: bool = true
 ## True when the steering comes from an analogue stick (no key smoothing): set
 ## by a deflected stick, cleared by a steering key.
 var steer_analog: bool = false
+## Phone touch steering held as keys (TouchControls: the BUTTONS and SPLIT
+## schemes): counted with the steering keys, so it takes the key path exactly.
+## Always false off the phone.
+var touch_steer_left: bool = false
+var touch_steer_right: bool = false
 ## When false the arrow keys do not drive (the tuning panel uses them).
 var arrow_keys_drive: bool = true
 
@@ -357,8 +362,9 @@ func _read_player_input() -> void:
 	if arrow_keys_drive:
 		left.append(&"arrow_left")
 		right.append(&"arrow_right")
-	var keys := float(_key_held(right)) - float(_key_held(left))
-	if keys != 0.0 or _key_held(left):
+	var held_left := _key_held(left) or touch_steer_left
+	var keys := float(_key_held(right) or touch_steer_right) - float(held_left)
+	if keys != 0.0 or held_left:
 		steer_input = keys
 		steer_analog = false
 	else:

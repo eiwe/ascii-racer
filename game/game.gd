@@ -581,7 +581,7 @@ func _process(delta: float) -> void:
 	if not _scripted or Mobile.active():
 		_check_display(delta)
 	if tilt != null:
-		tilt.enabled = car.player_input and not race_start.counting
+		tilt.enabled = car.player_input and not race_start.counting and phone_controls() == "tilt"
 		update_level()
 	nitro_hud.race_text = opponent.status_text() if opponent != null and not race_start.counting else ""
 	camera.zoom_choice = audio.zoom_setting
@@ -695,9 +695,15 @@ func _setup_mobile() -> void:
 func update_level() -> void:
 	if tilt == null:
 		return
-	var on := bool(audio.phone_get("level", true)) and in_race()
+	var on := bool(audio.phone_get("level", true)) and phone_controls() == "tilt" and in_race()
 	renderer.level_max = deg_to_rad(Mobile.level_max_deg()) if on else 0.0
 	renderer.level_angle = tilt.display_roll if on else 0.0
+
+
+## The phone's touch steering scheme (Mobile.CONTROLS).
+func phone_controls() -> String:
+	var c := String(audio.phone_get("controls", Mobile.CONTROLS[0]))
+	return c if Mobile.CONTROLS.has(c) else Mobile.CONTROLS[0]
 
 
 ## The phone's glyph size setting: text rows on the window height.

@@ -169,7 +169,7 @@ func _run() -> void:
 		if arg.begins_with("--dtonly="):
 			only = arg.trim_prefix("--dtonly=")
 	for t: String in ["spawn", "accel_brake", "corners", "limit", "nitro", "nitro_shots", "turns", "handbrake", "drift", "feel", "offroad", "kerbs", "tree", "cones", "jump", "bridge", "reset_bridge", "keys",
-			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting", "level_select", "tracks", "camera_blend", "time_of_day", "dirt_feel", "dust_tour", "abuse", "opp_trace", "bank_iso", "key_steer", "glyph_table", "mobile", "mobile_shots", "mobile_level"]:
+			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting", "level_select", "tracks", "camera_blend", "time_of_day", "dirt_feel", "dust_tour", "abuse", "opp_trace", "bank_iso", "key_steer", "glyph_table", "mobile", "mobile_shots", "mobile_level", "mobile_controls"]:
 		if only == "" or t in only.split(","):
 			await call("_test_" + t)
 	log_line("\n[summary] preset %s" % game.tuning.current)
@@ -5443,6 +5443,8 @@ func _test_mobile() -> void:
 	var out := PackedStringArray()
 	tl.test_roll_deg = 0.0
 	tl.flip = false
+	game.audio.phone_set("controls", "tilt") # these checks are the TILT scheme (BRAKE / NITRO bottom right)
+	await _frames(3)
 	# Lights, then the automatic throttle.
 	game.countdown_enabled = true
 	car.player_input = true
@@ -5644,6 +5646,7 @@ func _test_mobile() -> void:
 	_m["mobile menus"] = out[-1]
 	tl.test_roll_deg = NAN
 	game.countdown_enabled = false
+	game.audio.phone_set("controls", "buttons")
 
 
 ## Phone screenshots (run with -- --mobile in a 20:9 window): iso and chase at
@@ -5800,6 +5803,7 @@ func _test_mobile_level() -> void:
 	var au: AudioDirector = game.audio
 	var lmax := deg_to_rad(Mobile.level_max_deg())
 	tl.test_roll_deg = 0.0
+	au.phone_set("controls", "tilt") # the level display is TILT only
 	au.phone_set("level", true)
 	car.player_input = true
 	game.set_chase_view(true)
@@ -6007,3 +6011,247 @@ func _test_mobile_level() -> void:
 func _pframes(n: int) -> void:
 	for i in n:
 		await get_tree().process_frame
+
+
+
+# --- phone touch steering schemes (run with -- --mobile) ----------------------------------
+
+func _drag(index: int, pos: Vector2) -> void:
+	var e := InputEventScreenDrag.new()
+	e.index = index
+	e.position = pos
+	Input.parse_input_event(e)
+	Input.flush_buffered_events()
+
+
+## Physics frames until the wheel reaches full lock (or `limit`).
+func _frames_to_lock(limit: int = 240) -> int:
+	var n := 0
+	while car._steer_state < 0.999 and n < limit:
+		await _frames(1)
+		n += 1
+	return n
+
+
+## The four schemes with injected touches: BUTTONS (key path, full-lock times
+## against the keyboard at top speed and 3.5 u/s, sliding < to >, three
+## fingers), SLIDER (dead zone, the curve, origin follow, lift, BRAKE landing,
+## analogue path), SPLIT (halves, both = brake, NITRO, release order), the
+## level display only with TILT, the CONTROLS row by tap (rows and pitch per
+## scheme, saved), the frame-rate line; screenshots of each scheme.
+func _test_mobile_controls() -> void:
+	log_line("\n[mobile controls] touch steering schemes")
+	if not Mobile.active() or game.touch == null:
+		log_line("  skipped: run with -- --mobile")
+		return
+	renderer.fixed_output_size = Vector2i.ZERO
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--mobilewin="):
+			var wh := arg.trim_prefix("--mobilewin=").split("x")
+			get_window().size = Vector2i(wh[0].to_int(), wh[1].to_int())
+			await _frames(30)
+	var tag := "%dx%d_%s" % [get_window().size.x, get_window().size.y, "gl" if renderer.compat else "fp"]
+	var tc: TouchControls = game.touch
+	var tl: TiltInput = game.tilt
+	var au: AudioDirector = game.audio
+	var pad: Vector3 = (game.track as Track).bounds.end + Vector3(30.0, 0.0, 30.0)
+	pad.y = 0.0
+	var east := Vector3(1.0, 0.0, 0.0)
+	tl.test_roll_deg = 0.0
+	car.player_input = true
+	game.set_chase_view(true)
+	var gb: StaticBody3D = (game.track as Track).ground_body
+	gb.set_meta(&"surface", &"road") # asphalt, as key_steer
+	# --- BUTTONS
+	au.phone_set("controls", "buttons")
+	await _frames(3)
+	var r := tc.rects()
+	var out := PackedStringArray()
+	for vs: Array in [["top", car.top_speed], ["slow 3.5", 3.5]]:
+		var v: float = vs[1]
+		var res := PackedStringArray()
+		for how in ["keyboard D", "touch >"]:
+			await _place(pad, east, v)
+			await _frames(2)
+			if v < car.top_speed:
+				Input.action_release(&"throttle") # coast: below 30 % of top speed throughout
+			car._steer_state = 0.0
+			if how == "keyboard D":
+				_key(KEY_D, true)
+			else:
+				_touch(0, (r.right as Rect2).get_center(), true)
+			var n: int = await _frames_to_lock()
+			res.append("%s %.3f s (%s, %.1f u/s)" % [how, n / 120.0, "stick" if car.steer_analog else "key", car.forward_speed])
+			_key(KEY_D, false)
+			_touch(0, Vector2.ZERO, false)
+			await _frames(30)
+		out.append("BUTTONS full lock at %s: %s" % [vs[0], ", ".join(res)])
+	# Sliding from < to > without lifting.
+	await _place(pad, east, 6.0)
+	_touch(0, (r.left as Rect2).get_center(), true)
+	await _frames(40)
+	var s1 := car.steer_input
+	_drag(0, (r.left as Rect2).get_center() + Vector2((r.left as Rect2).size.x * 0.6, 0.0))
+	await _frames(3)
+	_drag(0, (r.right as Rect2).get_center())
+	await _frames(40)
+	var s2 := car.steer_input
+	_touch(1, (r.left as Rect2).get_center(), true) # < and > both held = straight
+	await _frames(5)
+	var s3 := car.steer_input
+	_touch(1, Vector2.ZERO, false)
+	_touch(0, Vector2.ZERO, false)
+	out.append("BUTTONS slide < to >: steer %+.0f -> %+.0f (wheel %+.2f), plus a second finger on < (both held): %+.0f" % [s1, s2, car._steer_state, s3])
+	# Three fingers: steer, BRAKE, NITRO.
+	await _frames(20)
+	_touch(0, (r.left as Rect2).get_center(), true)
+	_touch(1, (r.brake as Rect2).get_center(), true)
+	_touch(2, (r.nitro as Rect2).get_center(), true)
+	await _frames(5)
+	out.append("BUTTONS three fingers: steer %+.0f (%s), brake %.2f, nitro %s, throttle %.2f" % [car.steer_input, "stick" if car.steer_analog else "key",
+		car.brake_input, car.nitro_input, car.throttle_input])
+	for i in 3:
+		_touch(i, Vector2.ZERO, false)
+	await _frames(5)
+	out.append("BUTTONS level display: active %s" % renderer.level_active)
+	for o in out:
+		log_line("  " + o)
+	_m["controls buttons"] = "; ".join(out)
+	# --- SLIDER
+	au.phone_set("controls", "slider")
+	await _frames(3)
+	r = tc.rects()
+	out = PackedStringArray()
+	var travel := TouchControls.SLIDER_TRAVEL * get_viewport().get_visible_rect().size.y
+	var o := Vector2((r.zone as Rect2).position.x + (r.zone as Rect2).size.x * 0.5, (r.zone as Rect2).get_center().y)
+	await _place(pad, east, 2.0)
+	_touch(0, o, true)
+	var rows := PackedStringArray()
+	for f: float in [0.04, 0.25, 0.5, 1.0, 1.5]:
+		_drag(0, o + Vector2(travel * f, 0.0))
+		await _frames(40)
+		var expect := pow(clampf((f - TouchControls.SLIDER_DEAD) / (1.0 - TouchControls.SLIDER_DEAD), 0.0, 1.0), TouchControls.SLIDER_EXPONENT)
+		rows.append("%.0f%%: steer %.3f (expect %.3f), car input %.3f %s, wheel %.3f" % [f * 100.0, tc.slider_steer, expect, car.steer_input,
+			"stick" if car.steer_analog else "key", car._steer_state])
+	_drag(0, o + Vector2(travel * 1.3, 0.0)) # 20 % of travel back from 150 %
+	await _frames(40)
+	rows.append("back 20%% after 150%%: steer %.3f (expect %.3f), wheel %.3f" % [tc.slider_steer,
+		pow((0.8 - TouchControls.SLIDER_DEAD) / (1.0 - TouchControls.SLIDER_DEAD), TouchControls.SLIDER_EXPONENT), car._steer_state])
+	_drag(0, o + Vector2(travel * 0.2, 0.0)) # back past the moved origin (now at 50 %): steers left at once
+	await _frames(40)
+	rows.append("then 30%% of travel left of the moved origin: steer %.3f (expect %.3f)" % [tc.slider_steer,
+		-pow((0.3 - TouchControls.SLIDER_DEAD) / (1.0 - TouchControls.SLIDER_DEAD), TouchControls.SLIDER_EXPONENT)])
+	_touch(0, Vector2.ZERO, false)
+	await _frames(40)
+	rows.append("lifted: steer %.3f, wheel %.3f" % [tc.slider_steer, car._steer_state])
+	_touch(1, (r.brake as Rect2).get_center(), true)
+	_drag(1, (r.brake as Rect2).get_center() - Vector2(travel, 0.0))
+	await _frames(20)
+	rows.append("landing on BRAKE and sliding: kind %s, steer %.3f, brake %.2f" % [tc.fingers.get(1, {}).get("kind", "-"), tc.slider_steer, car.brake_input])
+	_touch(1, Vector2.ZERO, false)
+	await _place(pad, east, car.top_speed)
+	await _frames(2)
+	car._steer_state = 0.0
+	_touch(0, o, true)
+	_drag(0, o + Vector2(travel * 1.2, 0.0))
+	var n_sl: int = await _frames_to_lock()
+	rows.append("full lock at top speed from a full slide: %.3f s (stick path, no key slowing)" % (n_sl / 120.0))
+	_touch(0, Vector2.ZERO, false)
+	await _frames(20)
+	rows.append("level display: active %s" % renderer.level_active)
+	for x in rows:
+		log_line("  SLIDER " + x)
+	_m["controls slider"] = "; ".join(rows)
+	# Screenshot with a thumb down (and the hint without one).
+	await _place_on_track(30.0, 0.0, 8.0)
+	await _frames(40)
+	await _shot_full("%s_slider_hint.png" % tag)
+	_touch(0, o, true)
+	_drag(0, o + Vector2(travel * 0.45, 0.0))
+	await _frames(30)
+	await _shot_full("%s_slider_driving.png" % tag)
+	_touch(0, Vector2.ZERO, false)
+	# --- SPLIT
+	au.phone_set("controls", "split")
+	await _frames(3)
+	r = tc.rects()
+	var win := get_viewport().get_visible_rect().size
+	rows = PackedStringArray()
+	await _place(pad, east, 6.0)
+	_touch(0, Vector2(win.x * 0.25, win.y * 0.45), true)
+	await _frames(10)
+	rows.append("left half: steer %+.0f (%s)" % [car.steer_input, "stick" if car.steer_analog else "key"])
+	_touch(1, Vector2(win.x * 0.75, win.y * 0.45), true)
+	await _frames(10)
+	rows.append("both halves: steer %+.0f, brake %.2f, throttle %.2f" % [car.steer_input, car.brake_input, car.throttle_input])
+	_touch(0, Vector2.ZERO, false)
+	await _frames(10)
+	rows.append("left lifted: steer %+.0f, brake %.2f" % [car.steer_input, car.brake_input])
+	_touch(2, (r.nitro as Rect2).get_center(), true)
+	await _frames(10)
+	rows.append("NITRO with the right half held: nitro %s, steer %+.0f, brake %.2f (NITRO not a half)" % [car.nitro_input, car.steer_input, car.brake_input])
+	_touch(2, Vector2.ZERO, false)
+	_touch(1, Vector2.ZERO, false)
+	_touch(3, (r.nitro as Rect2).get_center(), true)
+	await _frames(5)
+	rows.append("NITRO alone: steer %+.0f, nitro %s; level display active %s" % [car.steer_input, car.nitro_input, renderer.level_active])
+	_touch(3, Vector2.ZERO, false)
+	for x in rows:
+		log_line("  SPLIT " + x)
+	_m["controls split"] = "; ".join(rows)
+	# --- TILT: the level display only here.
+	au.phone_set("controls", "tilt")
+	await _frames(5)
+	log_line("  TILT level display active %s" % renderer.level_active)
+	_m["controls tilt"] = "level display active %s" % renderer.level_active
+	# Screenshots of each scheme while driving (BUTTONS / SPLIT with a finger on a steer control).
+	for sch: String in ["buttons", "split", "tilt"]:
+		au.phone_set("controls", sch)
+		await _place_on_track(30.0, 0.0, 8.0)
+		await _frames(5)
+		var rr := tc.rects()
+		if sch == "buttons":
+			_touch(0, (rr.right as Rect2).get_center(), true)
+		elif sch == "split":
+			_touch(0, Vector2(win.x * 0.75, win.y * 0.45), true)
+		else:
+			tl.test_roll_deg = 12.0
+		await _frames(40)
+		await _shot_full("%s_%s_driving.png" % [tag, sch])
+		_touch(0, Vector2.ZERO, false)
+		tl.test_roll_deg = 0.0
+	# --- CONTROLS row by tap, frame-rate line.
+	au.phone_set("controls", "buttons")
+	await _place_on_track(30.0, 0.0, 8.0)
+	await get_tree().create_timer(6.0).timeout # racing, for the frame-rate record
+	var pm: PauseMenu = game.pause_menu
+	pm.open(false)
+	await _frames(40)
+	rows = PackedStringArray()
+	rows.append("fps line: \"%s\"" % pm._fps_text)
+	await _shot_full("%s_pause_buttons.png" % tag)
+	for step in 5:
+		var cpx := Vector2.ZERO
+		var cell_w := Vector2(renderer.pitch) * get_viewport().get_visible_rect().size / Vector2(renderer.output_size)
+		var ys: Array[int] = []
+		for h: Array in pm._hits:
+			ys.append((h[0] as Rect2i).position.y)
+			if pm.items[h[1]] == PauseMenu.Item.CONTROLS:
+				cpx = Vector2((int(h[2]) + 9) * cell_w.x, ((h[0] as Rect2i).position.y + 0.5) * cell_w.y)
+		var pitch_px := float(ys[1] - ys[0]) * cell_w.y if ys.size() > 1 else 0.0
+		rows.append("%s: %d rows, FLIP %s LEVEL %s, glyphs %d px, row pitch %.0f px at %d high" % [au.phone_get("controls", "buttons"),
+			pm.items.size(), pm.items.has(PauseMenu.Item.FLIP), pm.items.has(PauseMenu.Item.LEVEL), renderer.settings.glyph_px, pitch_px, get_window().size.y])
+		if au.phone_get("controls", "") == "tilt":
+			await _shot_full("%s_pause_tilt.png" % tag)
+		if step < 4:
+			_mouse(cpx, true)
+			_mouse(cpx, false)
+			await _frames(30)
+	pm.close()
+	await _frames(5)
+	rows.append("saved: %s" % FileAccess.get_file_as_string(au.settings_path).contains("controls=\"buttons\""))
+	for x in rows:
+		log_line("  MENU " + x)
+	_m["controls menu"] = "; ".join(rows)
+	gb.set_meta(&"surface", &"ground")
+	tl.test_roll_deg = NAN

@@ -17,6 +17,9 @@ const UI_REF_HEIGHT: float = 420.0
 ## Level display: the largest turn of the picture (degrees); beyond it the
 ## picture turns with the phone. `-- --levelmax=<deg>` overrides it (tests).
 const LEVEL_MAX_DEG: float = 30.0
+## Touch steering schemes (the pause menu's CONTROLS, [phone] controls), in
+## menu order; the first is the default.
+const CONTROLS: PackedStringArray = ["buttons", "slider", "split", "tilt"]
 
 
 static func level_max_deg() -> float:

@@ -17,15 +17,17 @@ extends Node
 signal opened
 signal closed
 
-enum Item { RESUME, RESTART, CHANGE_TRACK, START_RACE, OPPONENT, ZOOM, VOLUME, MUSIC, SFX, SOUND_CHECK, TITLE, QUIT, CAMERA, GLYPH, FLIP, LEVEL }
+enum Item { RESUME, RESTART, CHANGE_TRACK, START_RACE, OPPONENT, ZOOM, VOLUME, MUSIC, SFX, SOUND_CHECK, TITLE, QUIT, CAMERA, GLYPH, FLIP, LEVEL, CONTROLS }
 const LABELS: Dictionary = {
 	Item.RESUME: "RESUME", Item.RESTART: "RESTART", Item.CHANGE_TRACK: "CHANGE TRACK", Item.START_RACE: "START RACE",
 	Item.OPPONENT: "OPPONENT", Item.ZOOM: "ZOOM", Item.VOLUME: "VOLUME", Item.MUSIC: "MUSIC", Item.SFX: "SFX", Item.SOUND_CHECK: "SOUND CHECK",
 	Item.TITLE: "TO TITLE", Item.QUIT: "QUIT",
-	Item.CAMERA: "CAMERA", Item.GLYPH: "GLYPH SIZE", Item.FLIP: "FLIP STEERING", Item.LEVEL: "LEVEL DISPLAY",
+	Item.CAMERA: "CAMERA", Item.GLYPH: "GLYPH SIZE", Item.FLIP: "FLIP STEERING", Item.LEVEL: "LEVEL DISPLAY", Item.CONTROLS: "CONTROLS",
 }
 ## Phone rows (Mobile.active()), after ZOOM. A later row joins this list.
-const PHONE_ITEMS: Array[int] = [Item.CAMERA, Item.GLYPH, Item.FLIP, Item.LEVEL]
+const PHONE_ITEMS: Array[int] = [Item.CONTROLS, Item.CAMERA, Item.GLYPH, Item.FLIP, Item.LEVEL]
+## Phone rows shown only with CONTROLS on TILT (the menu is short of height).
+const TILT_ITEMS: Array[int] = [Item.FLIP, Item.LEVEL]
 ## Phone: rows this many cells apart, and taps ignored this long after opening
 ## (the tap that opened it). While open, the glyphs grow so the menu fills the
 ## height (phone_menu_px): single-cell text at the phone's driving size is too
@@ -65,6 +67,8 @@ var _stick := Vector2i.ZERO
 var _hold_dir := Vector2i.ZERO
 var _hold_t: float = 0.0
 var _opponent_at_open: int = 0
+## Phone: the frame rate over the last seconds of racing before the menu opened.
+var _fps_text: String = ""
 ## Phone: [cell rect, item index, value x, bar width] per row, from the last draw.
 var _hits: Array = []
 
@@ -78,6 +82,30 @@ func open(reel: bool) -> void:
 	if is_open:
 		return
 	in_reel = reel
+	_build_items()
+	selected = 0
+	_opponent_at_open = audio.opponent_level
+	if Mobile.active():
+		renderer.settings.glyph_px = phone_menu_px()
+		_fps_text = ""
+		var tc: Node = game.get("touch")
+		if tc != null:
+			var f: Vector2 = tc.fps_stats()
+			if f.x > 0.0:
+				_fps_text = "%d fps (low %d)" % [roundi(f.x), roundi(f.y)]
+	is_open = true
+	_t = 0.0
+	get_tree().paused = true
+	audio.set_context(AudioDirector.Context.PAUSED)
+	if game.get("rumble") != null:
+		game.rumble.stop()
+	renderer.overlay_enabled = true
+	opened.emit()
+
+
+## The rows for the reel or a race (and the phone's, by its CONTROLS).
+func _build_items() -> void:
+	var reel := in_reel
 	items.clear()
 	if reel:
 		items.append(Item.START_RACE)
@@ -88,7 +116,9 @@ func open(reel: bool) -> void:
 	if Mobile.active():
 		# No sound check on the phone (a row less to fit); the phone's own rows.
 		items.append_array([Item.OPPONENT, Item.ZOOM])
-		items.append_array(PHONE_ITEMS)
+		for it in PHONE_ITEMS:
+			if not TILT_ITEMS.has(it) or audio.phone_get("controls", Mobile.CONTROLS[0]) == "tilt":
+				items.append(it)
 		items.append_array([Item.VOLUME, Item.MUSIC, Item.SFX])
 	else:
 		items.append_array([Item.OPPONENT, Item.ZOOM, Item.VOLUME, Item.MUSIC, Item.SFX, Item.SOUND_CHECK])
@@ -96,18 +126,6 @@ func open(reel: bool) -> void:
 		items.append(Item.TITLE)
 	if not OS.has_feature("web"):
 		items.append(Item.QUIT) # a browser page cannot quit
-	selected = 0
-	_opponent_at_open = audio.opponent_level
-	if Mobile.active():
-		renderer.settings.glyph_px = phone_menu_px()
-	is_open = true
-	_t = 0.0
-	get_tree().paused = true
-	audio.set_context(AudioDirector.Context.PAUSED)
-	if game.get("rumble") != null:
-		game.rumble.stop()
-	renderer.overlay_enabled = true
-	opened.emit()
 
 
 func close() -> void:
@@ -254,6 +272,15 @@ func _move(dir: Vector2i) -> void:
 		Item.GLYPH:
 			# Larger glyphs = fewer rows.
 			game.set_phone_rows(game.phone_rows() - dir.x * Mobile.ROWS_STEP)
+		Item.CONTROLS:
+			var c := Mobile.CONTROLS.find(String(audio.phone_get("controls", Mobile.CONTROLS[0])))
+			audio.phone_set("controls", Mobile.CONTROLS[posmod(c + dir.x, Mobile.CONTROLS.size())])
+			# FLIP STEERING and LEVEL DISPLAY come and go with TILT; stay on CONTROLS.
+			_build_items()
+			selected = items.find(Item.CONTROLS)
+			renderer.settings.glyph_px = phone_menu_px()
+			if game.has_method("update_level"):
+				game.update_level()
 		Item.LEVEL:
 			audio.phone_set("level", not bool(audio.phone_get("level", true)))
 			if game.has_method("update_level"):
@@ -284,7 +311,7 @@ func _choose() -> void:
 			game.attract.start(false)
 		Item.QUIT:
 			audio.quit()
-		Item.OPPONENT, Item.VOLUME, Item.MUSIC, Item.SFX, Item.CAMERA, Item.GLYPH, Item.FLIP, Item.LEVEL:
+		Item.OPPONENT, Item.VOLUME, Item.MUSIC, Item.SFX, Item.CAMERA, Item.GLYPH, Item.FLIP, Item.LEVEL, Item.CONTROLS:
 			_move(Vector2i.RIGHT)
 		Item.ZOOM:
 			# Enter cycles, back to AUTO after the farthest step.
@@ -355,7 +382,7 @@ func _draw() -> void:
 		var vy := y
 		_hits.append([Rect2i(x0 - 2, y, w + 4, row_h), i, vx, bar_w]) # text row y; tap() centres the target on it
 		match it:
-			Item.CAMERA, Item.GLYPH, Item.FLIP, Item.LEVEL:
+			Item.CAMERA, Item.GLYPH, Item.FLIP, Item.LEVEL, Item.CONTROLS:
 				var txt := "< %s >" % phone_value(it)
 				if big:
 					_logo.draw_mini(txt, vx, vy, Vector2i.ONE, 0, func(_f: float) -> Color: return ink, 0.0)
@@ -403,7 +430,10 @@ func _draw() -> void:
 		y += row_h
 	var hint := "Up/Down move  Left/Right adjust  Enter choose  Esc close  M mute" + ("  [MUTED]" if audio.muted else "")
 	if Mobile.active():
-		hint = "Tap a row   tap < or > to change   Back resumes" + ("  [MUTED]" if audio.muted else "")
+		hint = "Tap a row   tap < or > to change   Back resumes" + ("  [MUTED]" if audio.muted else "") \
+			+ ("   " + _fps_text if _fps_text != "" else "")
+	if hint.length() > w and Mobile.active():
+		hint = "Tap a row   Back resumes" + ("   " + _fps_text if _fps_text != "" else "")
 	if hint.length() > w:
 		hint = "Arrows  Enter  Esc" + (" [MUTED]" if audio.muted else "")
 	ov.text(x0 + (w - hint.length()) / 2, y0 + h - 1, hint, INK_DIM)
@@ -415,7 +445,8 @@ func phone_menu_px() -> int:
 	# The panel's rows (title 5, gaps, the items, hint) and its two edge rules.
 	var need := 5 + 3 + items.size() * PHONE_ROW_H + 3 + 2
 	var h := renderer.get_viewport().get_visible_rect().size.y
-	return clampi(floori(h / float(need)), renderer.settings.glyph_px, 64)
+	var driving_px: int = game.default_glyph_px() if game.has_method("default_glyph_px") else renderer.settings.glyph_px
+	return clampi(floori(h / float(need)), driving_px, 64)
 
 
 ## A phone row's value.
@@ -429,6 +460,8 @@ func phone_value(it: int) -> String:
 			return "ON" if bool(audio.phone_get("flip", false)) else "OFF"
 		Item.LEVEL:
 			return "ON" if bool(audio.phone_get("level", true)) else "OFF"
+		Item.CONTROLS:
+			return String(audio.phone_get("controls", Mobile.CONTROLS[0])).to_upper()
 	return ""
 
 
@@ -442,6 +475,9 @@ func phone_note(it: int) -> String:
 			return "if tilting right steers left"
 		Item.LEVEL:
 			return "the picture stays level as you tilt"
+		Item.CONTROLS:
+			return {"buttons": "< > to steer", "slider": "slide the left thumb", "split": "hold a side to steer", "tilt": "tilt the phone"}.get(
+				String(audio.phone_get("controls", Mobile.CONTROLS[0])), "")
 	return ""
 
 
@@ -476,7 +512,7 @@ func tap(pos: Vector2, drag: bool) -> void:
 			return
 		if drag:
 			return
-		var adjustable := it in [Item.OPPONENT, Item.ZOOM, Item.SOUND_CHECK, Item.CAMERA, Item.GLYPH, Item.FLIP, Item.LEVEL]
+		var adjustable := it in [Item.OPPONENT, Item.ZOOM, Item.SOUND_CHECK, Item.CAMERA, Item.GLYPH, Item.FLIP, Item.LEVEL, Item.CONTROLS]
 		if adjustable:
 			if cell.x >= vx:
 				var txt_w := ("< %s >" % (phone_value(it) if it in PHONE_ITEMS else "XXXX")).length()

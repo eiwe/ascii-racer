@@ -24,6 +24,13 @@ extends RefCounted
 const ROAD: StringName = &"road"
 const GROUND: StringName = &"ground"
 
+## "grip_lock_deg" (phone only, read by Car.grip_limit_angle()): degrees added
+## to the grip-limited lock's wheel angle on this surface (front wheels'
+## mean). The bicycle-model formula misses how much more slip the front takes
+## than the rear at the limit on a surface with a large peak slip (snow: front
+## about 15 deg, rear about 11.5 at the yaw knee at speed); measured with
+## --dtonly=mobile_grip, which checks that full input reaches 95 % of the best
+## steady yaw rate. Absent = 0 (asphalt, dirt).
 const TABLE: Dictionary = {
 	&"road": {"grip": 1.0, "peak_slip": 1.0, "slide_grip": 1.0, "drag": 0.0, "on_road": true, "colour": Color("5a6179"), "sound": "asphalt"},
 	&"ground": {"grip": 0.58 / 1.3, "peak_slip": 1.0, "slide_grip": 1.0, "drag": 1.1, "on_road": false, "colour": Color(0.075, 0.09, 0.08), "sound": "asphalt"},
@@ -39,7 +46,7 @@ const TABLE: Dictionary = {
 	# that hold and steer, long stops; the rear is not looser than the front and
 	# lifting off does little, so the car runs wide rather than spinning; a
 	# little wheelspin at launch.
-	&"snow": {"grip": 0.57, "peak_slip": 2.0, "slide_grip": 1.12, "drag": 0.0, "rear_grip": 1.0, "power_oversteer": 1.0,
+	&"snow": {"grip": 0.57, "peak_slip": 2.0, "slide_grip": 1.12, "drag": 0.0, "rear_grip": 1.0, "power_oversteer": 1.0, "grip_lock_deg": 0.85,
 		"coast": 0.9, "brake": 0.62, "drift_loss": 0.75, "on_road": true, "colour": Color("dfe6f0"), "sound": "snow", "dust": Color("eef3fa"), "bright": true},
 }
 

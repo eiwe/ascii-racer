@@ -77,6 +77,7 @@ var view_blend: ViewBlend
 ## Phone only (Mobile.active()): tilt steering and the touch buttons.
 var tilt: TiltInput
 var touch: TouchControls
+var phone_assist: PhoneAssist
 
 var _safe_pose: Transform3D
 var _safe_timer: float = 0.0
@@ -688,6 +689,12 @@ func _setup_mobile() -> void:
 	touch.game = self
 	touch.car = car
 	add_child(touch)
+	phone_assist = PhoneAssist.new()
+	phone_assist.name = "PhoneAssist"
+	phone_assist.game = self
+	phone_assist.car = car
+	add_child(phone_assist)
+	touch.assist = phone_assist
 
 
 ## Phone: the level display (pause menu LEVEL DISPLAY, saved, on by default)
@@ -746,7 +753,7 @@ func in_race() -> bool:
 ## in the level select it goes back to the reel, in a menu it closes it.
 func mobile_back() -> void:
 	if pause_menu.is_open:
-		pause_menu.close()
+		pause_menu.back()
 	elif level_select != null and level_select.active:
 		level_select.go_back()
 	elif in_race():

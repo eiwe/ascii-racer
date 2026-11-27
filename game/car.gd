@@ -230,6 +230,20 @@ var steer_analog: bool = false
 ## Always false off the phone.
 var touch_steer_left: bool = false
 var touch_steer_right: bool = false
+## Phone steering aids (PhoneAssist sets them while the steering comes from
+## touch or tilt; 0 everywhere else, which leaves the steering exactly as it is):
+## the grip-limited lock (full input asks for this many times the wheel angle
+## at the tyres' limit, grip_limit_angle(), never more than the speed lock;
+## 0 = off) and the steering assist's wheel angle (radians, added to the
+## player's).
+var phone_grip_margin: float = 0.0
+var phone_assist_angle: float = 0.0
+## Drive test only: four surfaces (fl, fr, bl, br) used instead of what each
+## wheel stands on (split grip held through a turn); empty in the game.
+var test_surfaces: Array[StringName] = []
+## The wheel angle the player's input (and the phone's assist) asks for, before
+## the car's own counter-steer assist: for tests.
+var steer_request_angle: float = 0.0
 ## When false the arrow keys do not drive (the tuning panel uses them).
 var arrow_keys_drive: bool = true
 
@@ -253,6 +267,12 @@ var wheel_spin: PackedFloat32Array = [0.0, 0.0, 0.0, 0.0]
 ## Per wheel, last step: grip relative to asphalt, and whether it was on a
 ## surface other than asphalt or the plain ground (for split-grip braking).
 var _wheel_ratio: PackedFloat32Array = [1.0, 1.0, 1.0, 1.0]
+## Per wheel, from the last physics step: friction coefficient (surface grip x
+## the axle's grip) and the lateral peak slip angle (deg). For grip_limit_angle().
+var _wheel_mu: PackedFloat32Array = [1.365, 1.365, 1.43, 1.43]
+var _wheel_ps: PackedFloat32Array = [7.0, 7.0, 7.0, 7.0]
+var _wheel_lock_deg: PackedFloat32Array = [0.0, 0.0, 0.0, 0.0] ## Surfaces "grip_lock_deg"
+var _wheelbase: float = 0.5
 var _wheel_special: Array[bool] = [false, false, false, false]
 var slip_angle: float = 0.0 ## car body slip (radians), + = moving to its right
 var local_accel: Vector3 = Vector3.ZERO ## filtered, body frame: x right, z forward
@@ -319,6 +339,8 @@ func _ready() -> void:
 			_visual_offset[i] = rest - physics_wheel_rest[i]
 			rest = physics_wheel_rest[i]
 		_rest.append(rest)
+	if _rest.size() == 4:
+		_wheelbase = absf((_rest[0].z + _rest[1].z) * 0.5 - (_rest[2].z + _rest[3].z) * 0.5)
 	refresh_tuning()
 	_ray.collision_mask = Track.LAYER_SURFACE
 	_ray.exclude = [get_rid()]
@@ -441,6 +463,8 @@ func _physics_process(delta: float) -> void:
 		_wheel_drop[i] = hub
 		wheels_grounded += 1
 		var surf: StringName = hit.collider.get_meta(&"surface", &"road")
+		if test_surfaces.size() == 4:
+			surf = test_surfaces[i]
 		wheel_surface[i] = surf
 		var classic := Surfaces.is_classic(surf)
 		var on_road: bool = surf == &"road" or not classic and bool(Surfaces.get_value(surf, "on_road", true))
@@ -481,6 +505,9 @@ func _physics_process(delta: float) -> void:
 		var f_brake := 1.0 if classic else float(Surfaces.get_value(surf, "brake", 1.0))
 		_drift_loss_sum += 1.0 if classic else float(Surfaces.get_value(surf, "drift_loss", 1.0))
 		var mu := surf_grip * (front_grip if front else rear_grip * f_rear)
+		_wheel_mu[i] = mu
+		_wheel_ps[i] = peak_slip_deg if classic else peak_slip_deg * float(Surfaces.get_value(surf, "peak_slip", 1.0))
+		_wheel_lock_deg[i] = 0.0 if classic else float(Surfaces.get_value(surf, "grip_lock_deg", 0.0))
 		if not front and handbrake_input and (not drift_mode or forward_speed < drift_min_speed and absf(steer_input) >= drift_steer_threshold):
 			mu *= handbrake_rear_grip
 		var grip := mu * load
@@ -586,10 +613,17 @@ func _update_steering(delta: float) -> void:
 		rate = steer_return_speed
 	_steer_state = move_toward(_steer_state, target, rate * delta)
 	var lock := deg_to_rad(lerpf(max_steer_low_deg, max_steer_high_deg, t))
+	if phone_grip_margin > 0.0:
+		lock = minf(lock, phone_grip_margin * grip_limit_angle())
 	if countersteer_open_deg > 0.0 and forward_speed > 1.0 and _steer_state != 0.0 and signf(_steer_state) == signf(slip_angle):
 		lock = lerpf(lock, deg_to_rad(max_steer_low_deg), clampf(absf(slip_angle) / deg_to_rad(countersteer_open_deg), 0.0, 1.0))
 	steer_lock = lock
 	var angle := _steer_state * lock
+	if phone_assist_angle != 0.0:
+		# The phone's steering assist adds to the player's input, together never
+		# beyond the lock (the grip-limited one when that is on).
+		angle = clampf(angle + phone_assist_angle, -lock, lock)
+	steer_request_angle = angle
 	if forward_speed > 1.0:
 		var full := deg_to_rad(max_steer_low_deg)
 		var assist := clampf(slip_angle, -full, full) * counter_steer_assist
@@ -604,6 +638,24 @@ func _update_steering(delta: float) -> void:
 		var inside := clampf(steer_input * drift_dir, -1.0, 1.0)
 		angle = lerpf(angle, -drift_dir * drift_angle + drift_dir * inside * deg_to_rad(5.0), _drift_w)
 	steer_angle = clampf(angle, -deg_to_rad(max_steer_low_deg), deg_to_rad(max_steer_low_deg))
+
+
+## The front wheel angle (radians) at which the tyres reach their limit in a
+## steady turn at the current speed, from the car's own tyre model on the
+## surfaces under it: the bicycle model with the lateral force linear up to the
+## peak slip angle and equal axle loads. The weaker axle sets the cornering
+## limit a = G x min(mu front, mu rear); the wheel angle is the kinematic
+## atan(wheelbase x a / v^2) plus the front axle's slip angle at that load less
+## the rear's (each axle: peak slip x a / (mu G)). Split grip averages each
+## axle's two wheels.
+func grip_limit_angle() -> float:
+	var mf := maxf((_wheel_mu[0] + _wheel_mu[1]) * 0.5, 0.05)
+	var mr := maxf((_wheel_mu[2] + _wheel_mu[3]) * 0.5, 0.05)
+	var a := G * minf(mf, mr)
+	var v := maxf(absf(forward_speed), 0.5)
+	var slip := deg_to_rad((_wheel_ps[0] + _wheel_ps[1]) * 0.5) * a / (mf * G) - deg_to_rad((_wheel_ps[2] + _wheel_ps[3]) * 0.5) * a / (mr * G)
+	var surface := deg_to_rad((_wheel_lock_deg[0] + _wheel_lock_deg[1]) * 0.5) # the surface's correction (Surfaces "grip_lock_deg")
+	return maxf(atan(_wheelbase * a / (v * v)) + slip + surface, deg_to_rad(0.5))
 
 
 ## Top speed with the nitro's gain at its current level.

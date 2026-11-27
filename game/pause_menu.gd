@@ -17,13 +17,23 @@ extends Node
 signal opened
 signal closed
 
-enum Item { RESUME, RESTART, CHANGE_TRACK, START_RACE, OPPONENT, ZOOM, VOLUME, MUSIC, SFX, SOUND_CHECK, TITLE, QUIT, CAMERA, GLYPH, FLIP, LEVEL, CONTROLS }
+enum Item { RESUME, RESTART, CHANGE_TRACK, START_RACE, OPPONENT, ZOOM, VOLUME, MUSIC, SFX, SOUND_CHECK, TITLE, QUIT, CAMERA, GLYPH, FLIP, LEVEL, CONTROLS,
+	SENS, STEER_ASSIST, BRAKE_ASSIST, GRIP, CORNER, MORE, BACK }
 const LABELS: Dictionary = {
 	Item.RESUME: "RESUME", Item.RESTART: "RESTART", Item.CHANGE_TRACK: "CHANGE TRACK", Item.START_RACE: "START RACE",
 	Item.OPPONENT: "OPPONENT", Item.ZOOM: "ZOOM", Item.VOLUME: "VOLUME", Item.MUSIC: "MUSIC", Item.SFX: "SFX", Item.SOUND_CHECK: "SOUND CHECK",
 	Item.TITLE: "TO TITLE", Item.QUIT: "QUIT",
 	Item.CAMERA: "CAMERA", Item.GLYPH: "GLYPH SIZE", Item.FLIP: "FLIP STEERING", Item.LEVEL: "LEVEL DISPLAY", Item.CONTROLS: "CONTROLS",
+	Item.SENS: "SENSITIVITY", Item.STEER_ASSIST: "STEER ASSIST", Item.BRAKE_ASSIST: "BRAKE ASSIST", Item.GRIP: "GRIP MARGIN",
+	Item.CORNER: "CORNER SPEED", Item.MORE: "MORE SETTINGS", Item.BACK: "BACK",
 }
+## Phone rows with a value ("< value >"), and the rows on each page. Page 1:
+## the driving rows the owner tunes most; page 2 (MORE SETTINGS) the rest.
+const PHONE_VALUE_ITEMS: Array[int] = [Item.CONTROLS, Item.CAMERA, Item.GLYPH, Item.FLIP, Item.LEVEL,
+	Item.SENS, Item.STEER_ASSIST, Item.BRAKE_ASSIST, Item.GRIP, Item.CORNER]
+const PHONE_PAGE1: Array[int] = [Item.CONTROLS, Item.SENS, Item.STEER_ASSIST, Item.BRAKE_ASSIST, Item.MORE]
+const PHONE_PAGE2: Array[int] = [Item.BACK, Item.OPPONENT, Item.ZOOM, Item.CAMERA, Item.GLYPH, Item.GRIP, Item.CORNER,
+	Item.FLIP, Item.LEVEL, Item.VOLUME, Item.MUSIC, Item.SFX]
 ## Phone rows (Mobile.active()), after ZOOM. A later row joins this list.
 const PHONE_ITEMS: Array[int] = [Item.CONTROLS, Item.CAMERA, Item.GLYPH, Item.FLIP, Item.LEVEL]
 ## Phone rows shown only with CONTROLS on TILT (the menu is short of height).
@@ -67,6 +77,8 @@ var _stick := Vector2i.ZERO
 var _hold_dir := Vector2i.ZERO
 var _hold_t: float = 0.0
 var _opponent_at_open: int = 0
+## Phone: the menu page (1 or 2, MORE SETTINGS).
+var page: int = 1
 ## Phone: the frame rate over the last seconds of racing before the menu opened.
 var _fps_text: String = ""
 ## Phone: [cell rect, item index, value x, bar width] per row, from the last draw.
@@ -82,6 +94,7 @@ func open(reel: bool) -> void:
 	if is_open:
 		return
 	in_reel = reel
+	page = 1
 	_build_items()
 	selected = 0
 	_opponent_at_open = audio.opponent_level
@@ -114,12 +127,18 @@ func _build_items() -> void:
 		if game.get("attract") != null:
 			items.append(Item.CHANGE_TRACK)
 	if Mobile.active():
-		# No sound check on the phone (a row less to fit); the phone's own rows.
-		items.append_array([Item.OPPONENT, Item.ZOOM])
-		for it in PHONE_ITEMS:
-			if not TILT_ITEMS.has(it) or audio.phone_get("controls", Mobile.CONTROLS[0]) == "tilt":
-				items.append(it)
-		items.append_array([Item.VOLUME, Item.MUSIC, Item.SFX])
+		# Two pages (no sound check on the phone): page 2 replaces the race rows.
+		var scheme := String(audio.phone_get("controls", Mobile.CONTROLS[0]))
+		if page == 2:
+			items.clear()
+		for it in PHONE_PAGE1 if page == 1 else PHONE_PAGE2:
+			if TILT_ITEMS.has(it) and scheme != "tilt":
+				continue
+			if it == Item.SENS and scheme != "tilt" and scheme != "slider":
+				continue
+			items.append(it)
+		if page == 2:
+			return
 	else:
 		items.append_array([Item.OPPONENT, Item.ZOOM, Item.VOLUME, Item.MUSIC, Item.SFX, Item.SOUND_CHECK])
 	if not reel and game.get("attract") != null:
@@ -277,10 +296,30 @@ func _move(dir: Vector2i) -> void:
 			audio.phone_set("controls", Mobile.CONTROLS[posmod(c + dir.x, Mobile.CONTROLS.size())])
 			# FLIP STEERING and LEVEL DISPLAY come and go with TILT; stay on CONTROLS.
 			_build_items()
-			selected = items.find(Item.CONTROLS)
+			selected = items.find(Item.CONTROLS) # FLIP / LEVEL / SENSITIVITY come and go
 			renderer.settings.glyph_px = phone_menu_px()
 			if game.has_method("update_level"):
 				game.update_level()
+		Item.SENS:
+			var key := "sens_tilt" if audio.phone_get("controls", Mobile.CONTROLS[0]) == "tilt" else "sens_slider"
+			audio.phone_set(key, Mobile.step_value(float(audio.phone_get(key, Mobile.SENSITIVITY_DEFAULT)), dir.x, Mobile.SENSITIVITY_RANGE))
+		Item.STEER_ASSIST:
+			audio.phone_set("steer_assist", Mobile.step_value(float(audio.phone_get("steer_assist", Mobile.STEER_ASSIST_DEFAULT)), dir.x, Mobile.STEER_ASSIST_RANGE))
+		Item.BRAKE_ASSIST:
+			audio.phone_set("brake_assist", not bool(audio.phone_get("brake_assist", Mobile.BRAKE_ASSIST_DEFAULT)))
+		Item.GRIP:
+			# OFF below the range's minimum.
+			var g := float(audio.phone_get("grip_margin", Mobile.GRIP_MARGIN_DEFAULT))
+			var r := Mobile.GRIP_MARGIN_RANGE
+			if g <= 0.0:
+				g = r.x if dir.x > 0 else 0.0
+			elif g <= r.x + 0.001 and dir.x < 0:
+				g = 0.0
+			else:
+				g = Mobile.step_value(g, dir.x, r)
+			audio.phone_set("grip_margin", g)
+		Item.CORNER:
+			audio.phone_set("corner_speed", Mobile.step_value(float(audio.phone_get("corner_speed", Mobile.CORNER_SPEED_DEFAULT)), dir.x, Mobile.CORNER_SPEED_RANGE))
 		Item.LEVEL:
 			audio.phone_set("level", not bool(audio.phone_get("level", true)))
 			if game.has_method("update_level"):
@@ -293,6 +332,10 @@ func _move(dir: Vector2i) -> void:
 
 func _choose() -> void:
 	match items[selected]:
+		Item.MORE:
+			set_page(2)
+		Item.BACK:
+			set_page(1)
 		Item.RESUME:
 			close()
 		Item.RESTART:
@@ -311,7 +354,7 @@ func _choose() -> void:
 			game.attract.start(false)
 		Item.QUIT:
 			audio.quit()
-		Item.OPPONENT, Item.VOLUME, Item.MUSIC, Item.SFX, Item.CAMERA, Item.GLYPH, Item.FLIP, Item.LEVEL, Item.CONTROLS:
+		Item.OPPONENT, Item.VOLUME, Item.MUSIC, Item.SFX, Item.CAMERA, Item.GLYPH, Item.FLIP, Item.LEVEL, Item.CONTROLS, Item.SENS, Item.STEER_ASSIST, Item.BRAKE_ASSIST, Item.GRIP, Item.CORNER:
 			_move(Vector2i.RIGHT)
 		Item.ZOOM:
 			# Enter cycles, back to AUTO after the farthest step.
@@ -382,7 +425,7 @@ func _draw() -> void:
 		var vy := y
 		_hits.append([Rect2i(x0 - 2, y, w + 4, row_h), i, vx, bar_w]) # text row y; tap() centres the target on it
 		match it:
-			Item.CAMERA, Item.GLYPH, Item.FLIP, Item.LEVEL, Item.CONTROLS:
+			Item.CAMERA, Item.GLYPH, Item.FLIP, Item.LEVEL, Item.CONTROLS, Item.SENS, Item.STEER_ASSIST, Item.BRAKE_ASSIST, Item.GRIP, Item.CORNER:
 				var txt := "< %s >" % phone_value(it)
 				if big:
 					_logo.draw_mini(txt, vx, vy, Vector2i.ONE, 0, func(_f: float) -> Color: return ink, 0.0)
@@ -449,6 +492,22 @@ func phone_menu_px() -> int:
 	return clampi(floori(h / float(need)), driving_px, 64)
 
 
+## Phone: shows page 1 or 2 (MORE SETTINGS / BACK), sized to its rows.
+func set_page(p: int) -> void:
+	page = p
+	_build_items()
+	selected = 0
+	renderer.settings.glyph_px = phone_menu_px()
+
+
+## The phone's back button: page 2 goes back to page 1, page 1 closes the menu.
+func back() -> void:
+	if page == 2:
+		set_page(1)
+	else:
+		close()
+
+
 ## A phone row's value.
 func phone_value(it: int) -> String:
 	match it:
@@ -462,6 +521,19 @@ func phone_value(it: int) -> String:
 			return "ON" if bool(audio.phone_get("level", true)) else "OFF"
 		Item.CONTROLS:
 			return String(audio.phone_get("controls", Mobile.CONTROLS[0])).to_upper()
+		Item.SENS:
+			var key := "sens_tilt" if audio.phone_get("controls", Mobile.CONTROLS[0]) == "tilt" else "sens_slider"
+			return "%.1f" % float(audio.phone_get(key, Mobile.SENSITIVITY_DEFAULT))
+		Item.STEER_ASSIST:
+			var a := float(audio.phone_get("steer_assist", Mobile.STEER_ASSIST_DEFAULT))
+			return "OFF" if a <= 0.0 else "%d %%" % roundi(a * 100.0)
+		Item.BRAKE_ASSIST:
+			return "ON" if bool(audio.phone_get("brake_assist", Mobile.BRAKE_ASSIST_DEFAULT)) else "OFF"
+		Item.GRIP:
+			var g := float(audio.phone_get("grip_margin", Mobile.GRIP_MARGIN_DEFAULT))
+			return "OFF" if g <= 0.0 else "%.2f" % g
+		Item.CORNER:
+			return "%d %%" % roundi(float(audio.phone_get("corner_speed", Mobile.CORNER_SPEED_DEFAULT)) * 100.0)
 	return ""
 
 
@@ -475,6 +547,17 @@ func phone_note(it: int) -> String:
 			return "if tilting right steers left"
 		Item.LEVEL:
 			return "the picture stays level as you tilt"
+		Item.SENS:
+			return "tilt: full lock at %.0f deg" % (TiltInput.FULL_LOCK_DEG / float(audio.phone_get("sens_tilt", Mobile.SENSITIVITY_DEFAULT))) \
+				if audio.phone_get("controls", Mobile.CONTROLS[0]) == "tilt" else "higher = less thumb travel"
+		Item.STEER_ASSIST:
+			return "follows the road; you steer on top"
+		Item.BRAKE_ASSIST:
+			return "lifts the throttle before corners"
+		Item.GRIP:
+			return "full steering = grip limit x this"
+		Item.CORNER:
+			return "brake assist: corner speeds it aims for"
 		Item.CONTROLS:
 			return {"buttons": "< > to steer", "slider": "slide the left thumb", "split": "hold a side to steer", "tilt": "tilt the phone"}.get(
 				String(audio.phone_get("controls", Mobile.CONTROLS[0])), "")
@@ -512,10 +595,10 @@ func tap(pos: Vector2, drag: bool) -> void:
 			return
 		if drag:
 			return
-		var adjustable := it in [Item.OPPONENT, Item.ZOOM, Item.SOUND_CHECK, Item.CAMERA, Item.GLYPH, Item.FLIP, Item.LEVEL, Item.CONTROLS]
+		var adjustable := it in [Item.OPPONENT, Item.ZOOM, Item.SOUND_CHECK, Item.CAMERA, Item.GLYPH, Item.FLIP, Item.LEVEL, Item.CONTROLS, Item.SENS, Item.STEER_ASSIST, Item.BRAKE_ASSIST, Item.GRIP, Item.CORNER]
 		if adjustable:
 			if cell.x >= vx:
-				var txt_w := ("< %s >" % (phone_value(it) if it in PHONE_ITEMS else "XXXX")).length()
+				var txt_w := ("< %s >" % (phone_value(it) if it in PHONE_VALUE_ITEMS else "XXXX")).length()
 				_move(Vector2i.LEFT if cell.x < vx + txt_w / 2 else Vector2i.RIGHT)
 		else:
 			_choose()

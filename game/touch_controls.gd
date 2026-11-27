@@ -37,7 +37,7 @@ const MARGIN: float = 0.04
 const GAP: float = 0.025
 ## SLIDER: full lock at this travel (x window height), the dead zone (share of
 ## the travel) and the curve: wheel = sign * amount^SLIDER_EXPONENT.
-const SLIDER_TRAVEL: float = 0.16
+const SLIDER_TRAVEL: float = 0.32
 const SLIDER_DEAD: float = 0.05
 const SLIDER_EXPONENT: float = 1.3
 ## Frame-rate record for the pause menu (seconds of racing kept).
@@ -45,8 +45,12 @@ const FPS_WINDOW: float = 5.0
 
 var game: Node
 var car: Car
+## The driving aids (the brake assist's throttle strength); null = none.
+var assist: PhoneAssist
+## SLIDER sensitivity: the travel to full lock is SLIDER_TRAVEL / sensitivity.
+var slider_sensitivity: float = 1.0
 ## "buttons", "slider", "split" or "tilt".
-var scheme: String = "buttons"
+var scheme: String = Mobile.CONTROLS[0]
 ## Finger index -> {kind, x, origin}: kind "brake", "nitro", "pause",
 ## "left" / "right" (steer buttons), "slider", "half_l" / "half_r" (SPLIT), "".
 var fingers: Dictionary = {}
@@ -60,6 +64,7 @@ var slider_steer: float = 0.0
 var _view: Control
 var _held := {"brake": false, "nitro": false}
 var _slider_holding: bool = false
+var _thr: float = 0.0
 var _frame_t: PackedFloat64Array = [] # ticks (s) of the frames drawn while racing
 var _last_tick: float = -1.0
 
@@ -124,7 +129,7 @@ func _process(_delta: float) -> void:
 		shown = s
 		if not s:
 			fingers.clear()
-	var want: String = game.audio.phone_get("controls", "buttons")
+	var want: String = game.phone_controls()
 	if want != scheme:
 		scheme = want
 		fingers.clear()
@@ -181,11 +186,14 @@ func _physics_process(_delta: float) -> void:
 	_apply_slider()
 	# Automatic throttle: lights out, driving, brake not held (from any source).
 	var live: bool = shown and not game.race_start.counting
-	var want := live and not Input.is_action_pressed(&"brake")
-	if want != auto_throttle:
-		auto_throttle = want
-		if want:
-			Input.action_press(&"throttle")
+	var thr := 0.0
+	if live and not Input.is_action_pressed(&"brake"):
+		thr = assist.throttle if assist != null else 1.0
+	if thr != _thr or (thr > 0.0) != auto_throttle:
+		_thr = thr
+		auto_throttle = thr > 0.0
+		if auto_throttle:
+			Input.action_press(&"throttle", thr)
 		else:
 			Input.action_release(&"throttle")
 
@@ -223,7 +231,12 @@ static func slider_shape(dx: float, travel: float) -> float:
 
 
 func _travel() -> float:
-	return SLIDER_TRAVEL * _view.get_viewport().get_visible_rect().size.y
+	return SLIDER_TRAVEL / maxf(slider_sensitivity, 0.01) * _view.get_viewport().get_visible_rect().size.y
+
+
+## SLIDER's travel to full lock in viewport pixels (with its sensitivity).
+func slider_travel() -> float:
+	return _travel()
 
 
 func _set_action(action: String, on: bool) -> void:

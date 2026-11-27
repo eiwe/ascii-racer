@@ -47,6 +47,8 @@ var steer: float = 0.0
 ## `flip`): its own faster low-pass (DISPLAY_RATE, chosen by simulation; the
 ## accelerometer fallback keeps FILTER_RATE), no dead zone, the same flat-phone fade.
 var display_roll: float = 0.0
+## Roll for full lock (the pause menu's SENSITIVITY: FULL_LOCK_DEG / sensitivity).
+var full_lock_deg: float = FULL_LOCK_DEG
 ## Where the roll came from: "sensor", "accelerometer", "none", "pad", "pointer", "test".
 var source: String = ""
 ## Tests: a roll in degrees to feed instead of the sensor or pointer (NAN = off).
@@ -67,7 +69,7 @@ func _physics_process(delta: float) -> void:
 	var upright := Vector2(_g.x, _g.y).length()
 	var r := atan2(_g.x, -_g.y) * smoothstep(UPRIGHT_FADE.x, UPRIGHT_FADE.y, upright)
 	roll = -r if flip else r
-	steer = shape(roll)
+	steer = shape(roll, full_lock_deg)
 	var rate := FILTER_RATE if source == "accelerometer" else DISPLAY_RATE
 	_gd = _gd.lerp(raw, 1.0 - exp(-rate * delta))
 	var rd := atan2(_gd.x, -_gd.y) * smoothstep(UPRIGHT_FADE.x, UPRIGHT_FADE.y, Vector2(_gd.x, _gd.y).length())
@@ -76,8 +78,8 @@ func _physics_process(delta: float) -> void:
 
 
 ## Steering for a roll (radians): zero inside the dead zone, full at FULL_LOCK_DEG.
-static func shape(r: float) -> float:
-	var a := clampf((absf(rad_to_deg(r)) - DEAD_ZONE_DEG) / (FULL_LOCK_DEG - DEAD_ZONE_DEG), 0.0, 1.0)
+static func shape(r: float, full_deg: float = FULL_LOCK_DEG) -> float:
+	var a := clampf((absf(rad_to_deg(r)) - DEAD_ZONE_DEG) / maxf(full_deg - DEAD_ZONE_DEG, 0.5), 0.0, 1.0)
 	return signf(r) * pow(a, EXPONENT)
 
 

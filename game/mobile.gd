@@ -19,7 +19,24 @@ const UI_REF_HEIGHT: float = 420.0
 const LEVEL_MAX_DEG: float = 30.0
 ## Touch steering schemes (the pause menu's CONTROLS, [phone] controls), in
 ## menu order; the first is the default.
-const CONTROLS: PackedStringArray = ["buttons", "slider", "split", "tilt"]
+const CONTROLS: PackedStringArray = ["slider", "buttons", "split", "tilt"]
+## Driving aids ([phone] keys, pause menu): defaults, ranges and steps. Each
+## has a value that turns it off: grip margin 0, steer assist 0, brake assist off.
+const GRIP_MARGIN_DEFAULT: float = 1.15
+const GRIP_MARGIN_RANGE: Vector3 = Vector3(1.0, 1.6, 0.05) ## min, max, step (and 0 = OFF below the min)
+const GRIP_ON_KEYS_DEFAULT: bool = true ## the grip-limited lock for BUTTONS / SPLIT too
+const STEER_ASSIST_DEFAULT: float = 0.5
+const STEER_ASSIST_RANGE: Vector3 = Vector3(0.0, 1.0, 0.25)
+const BRAKE_ASSIST_DEFAULT: bool = true
+const CORNER_SPEED_DEFAULT: float = 1.0
+const CORNER_SPEED_RANGE: Vector3 = Vector3(0.8, 1.2, 0.05)
+const SENSITIVITY_DEFAULT: float = 1.0
+const SENSITIVITY_RANGE: Vector3 = Vector3(0.5, 2.0, 0.1)
+
+
+## A [phone] value stepped by `dir` steps within its range (rounded to the step).
+static func step_value(v: float, dir: int, range: Vector3) -> float:
+	return clampf(snappedf(v + dir * range.z, range.z), range.x, range.y)
 
 
 static func level_max_deg() -> float:

@@ -169,7 +169,7 @@ func _run() -> void:
 		if arg.begins_with("--dtonly="):
 			only = arg.trim_prefix("--dtonly=")
 	for t: String in ["spawn", "accel_brake", "corners", "limit", "nitro", "nitro_shots", "turns", "handbrake", "drift", "feel", "offroad", "kerbs", "tree", "cones", "jump", "bridge", "reset_bridge", "keys",
-			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting", "level_select", "tracks", "camera_blend", "time_of_day", "dirt_feel", "dust_tour", "abuse", "opp_trace", "bank_iso", "key_steer", "glyph_table", "mobile", "mobile_shots", "mobile_level", "mobile_controls", "mobile_feel", "mobile_laps"]:
+			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting", "level_select", "tracks", "camera_blend", "time_of_day", "dirt_feel", "dust_tour", "abuse", "opp_trace", "bank_iso", "key_steer", "glyph_table", "mobile", "mobile_shots", "mobile_level", "mobile_controls", "mobile_feel", "mobile_laps", "mobile_grip", "mobile_assist", "mobile_aids_shots"]:
 		if only == "" or t in only.split(","):
 			await call("_test_" + t)
 	log_line("\n[summary] preset %s" % game.tuning.current)
@@ -5542,6 +5542,8 @@ func _test_mobile() -> void:
 	# Pause menu by tap: FLIP's value, the volume bar, RESUME.
 	var pm: PauseMenu = game.pause_menu
 	pm.open(false)
+	if pm.items.has(PauseMenu.Item.MORE):
+		pm.set_page(2) # FLIP STEERING and VOLUME are on the second page
 	await _frames(40) # the menu's glyphs (larger on the phone) and a first draw
 	var px_menu := renderer.settings.glyph_px
 	var flip0 := tl.flip
@@ -5567,6 +5569,13 @@ func _test_mobile() -> void:
 		await _frames(3)
 	var flip1 := tl.flip
 	var vol1: float = game.audio.master_volume
+	if pm.page == 2:
+		pm.set_page(1) # RESUME is on the first page
+		await _frames(20)
+		var cw := Vector2(renderer.pitch) * get_viewport().get_visible_rect().size / Vector2(renderer.output_size)
+		for h: Array in pm._hits:
+			if pm.items[h[1]] == PauseMenu.Item.RESUME:
+				resume_px = Vector2(((h[0] as Rect2i).position.x + 8) * cw.x, ((h[0] as Rect2i).position.y + 0.5) * cw.y)
 	_mouse(resume_px, true)
 	_mouse(resume_px, false)
 	await _frames(5)
@@ -6054,6 +6063,9 @@ func _test_mobile_controls() -> void:
 	var tc: TouchControls = game.touch
 	var tl: TiltInput = game.tilt
 	var au: AudioDirector = game.audio
+	# On the skid pad there is no road: the steering and brake assist are off here.
+	au.phone_set("steer_assist", 0.0)
+	au.phone_set("brake_assist", false)
 	var pad: Vector3 = (game.track as Track).bounds.end + Vector3(30.0, 0.0, 30.0)
 	pad.y = 0.0
 	var east := Vector3(1.0, 0.0, 0.0)
@@ -6239,8 +6251,14 @@ func _test_mobile_controls() -> void:
 			if pm.items[h[1]] == PauseMenu.Item.CONTROLS:
 				cpx = Vector2((int(h[2]) + 9) * cell_w.x, ((h[0] as Rect2i).position.y + 0.5) * cell_w.y)
 		var pitch_px := float(ys[1] - ys[0]) * cell_w.y if ys.size() > 1 else 0.0
-		rows.append("%s: %d rows, FLIP %s LEVEL %s, glyphs %d px, row pitch %.0f px at %d high" % [au.phone_get("controls", "buttons"),
-			pm.items.size(), pm.items.has(PauseMenu.Item.FLIP), pm.items.has(PauseMenu.Item.LEVEL), renderer.settings.glyph_px, pitch_px, get_window().size.y])
+		var n1 := pm.items.size()
+		pm.set_page(2)
+		var flip2 := pm.items.has(PauseMenu.Item.FLIP)
+		var level2 := pm.items.has(PauseMenu.Item.LEVEL)
+		pm.set_page(1)
+		await _frames(10)
+		rows.append("%s: page 1 %d rows, FLIP %s LEVEL %s (page 2), glyphs %d px, row pitch %.0f px at %d high" % [au.phone_get("controls", "buttons"),
+			n1, flip2, level2, renderer.settings.glyph_px, pitch_px, get_window().size.y])
 		if au.phone_get("controls", "") == "tilt":
 			await _shot_full("%s_pause_tilt.png" % tag)
 		if step < 4:
@@ -6255,6 +6273,9 @@ func _test_mobile_controls() -> void:
 	_m["controls menu"] = "; ".join(rows)
 	gb.set_meta(&"surface", &"ground")
 	tl.test_roll_deg = NAN
+	au.phone_set("steer_assist", Mobile.STEER_ASSIST_DEFAULT)
+	au.phone_set("brake_assist", Mobile.BRAKE_ASSIST_DEFAULT)
+	await _mobile_aids_menu()
 
 
 
@@ -6281,7 +6302,7 @@ var _fs_brake_split: bool = false
 
 
 func _fs_travel() -> float:
-	return TouchControls.SLIDER_TRAVEL * get_viewport().get_visible_rect().size.y
+	return (game.touch as TouchControls).slider_travel() # with the slider's sensitivity
 
 
 ## Switches the phone's CONTROLS scheme (level display off: it does not change the driving).
@@ -6408,7 +6429,13 @@ func _test_mobile_feel() -> void:
 	var gb: StaticBody3D = (game.track as Track).ground_body
 	gb.set_meta(&"surface", &"road")
 	car.player_input = true
-	var travel_mm := TouchControls.SLIDER_TRAVEL * FEEL_PHONE_MM
+	# The skid pad has no road: the steering and brake assist (which follow the
+	# road) are off for A, B and D; the grip-limited lock and sensitivity apply.
+	var keep_assist: Variant = game.audio.phone_get("steer_assist", Mobile.STEER_ASSIST_DEFAULT)
+	var keep_brake: Variant = game.audio.phone_get("brake_assist", Mobile.BRAKE_ASSIST_DEFAULT)
+	game.audio.phone_set("steer_assist", 0.0)
+	game.audio.phone_set("brake_assist", false)
+	var travel_mm := TouchControls.SLIDER_TRAVEL / float(game.audio.phone_get("sens_slider", Mobile.SENSITIVITY_DEFAULT)) * FEEL_PHONE_MM
 	var file := PackedStringArray()
 	file.append("# mobile_feel: window %s, slider travel %.0f px = %.1f mm (phone %.0f mm high)" % [get_viewport().get_visible_rect().size, _fs_travel(), travel_mm, FEEL_PHONE_MM])
 	var speeds: Array = [["top", car.top_speed], ["half", car.top_speed * 0.5], ["low", car.top_speed * 0.27]]
@@ -6588,6 +6615,8 @@ func _test_mobile_feel() -> void:
 		file.append(l)
 	_m["feel D"] = "; ".join(lines)
 	gb.set_meta(&"surface", &"ground")
+	game.audio.phone_set("steer_assist", keep_assist)
+	game.audio.phone_set("brake_assist", keep_brake)
 	game.audio.phone_set("controls", "buttons")
 	var fa := FileAccess.open(out_dir.path_join("mobile_feel.txt"), FileAccess.WRITE)
 	fa.store_string("\n".join(file) + "\n")
@@ -6756,6 +6785,10 @@ func _test_mobile_laps() -> void:
 	if OS.get_cmdline_user_args().has("--drvfactors"):
 		await _drv_factors()
 		return
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--drvconfigs="):
+			await _drv_configs(arg.trim_prefix("--drvconfigs="))
+			return
 	for tid: String in Tracks.ids():
 		if only != "" and tid != only:
 			continue
@@ -6827,3 +6860,515 @@ func _drv_factors() -> void:
 	var fa := FileAccess.open(out_dir.path_join("mobile_laps_factors.txt"), FileAccess.WRITE)
 	fa.store_string("\n".join(file) + "\n")
 	fa.close()
+
+
+
+# --- phone driving aids (run with -- --mobile) ----------------------------------------------
+
+## The grip-limited lock through the real path: for each surface (asphalt,
+## dirt, snow; split grip with the left wheels on snow, both turn directions)
+## and speed, a margin-OFF SLIDER sweep finds the best steady yaw rate and its
+## 95 % knee (steady turns only: speed held within 15 %, body slip under 12
+## deg); then full input with the margin at its default: the yaw rate as a share
+## of the best, the wheel angle against the knee's, speed, slip, and the lock
+## against today's. Target: share >= 95 %, wheel <= 1.3 x the knee's, lock <=
+## today's.
+func _test_mobile_grip() -> void:
+	log_line("\n[mobile grip] full input with the grip-limited lock against the best steady yaw rate")
+	if not Mobile.active() or game.touch == null:
+		log_line("  skipped: run with -- --mobile")
+		return
+	var au: AudioDirector = game.audio
+	var keep := {"grip_margin": au.phone_get("grip_margin", Mobile.GRIP_MARGIN_DEFAULT), "steer_assist": au.phone_get("steer_assist", Mobile.STEER_ASSIST_DEFAULT),
+		"brake_assist": au.phone_get("brake_assist", Mobile.BRAKE_ASSIST_DEFAULT), "sens_slider": au.phone_get("sens_slider", Mobile.SENSITIVITY_DEFAULT)}
+	var margin := float(keep.grip_margin) if float(keep.grip_margin) > 0.0 else Mobile.GRIP_MARGIN_DEFAULT
+	au.phone_set("steer_assist", 0.0)
+	au.phone_set("brake_assist", false)
+	au.phone_set("sens_slider", 1.0)
+	var gb: StaticBody3D = (game.track as Track).ground_body
+	car.player_input = true
+	var file := PackedStringArray(["# mobile_grip: margin %.2f; case, speed, best yaw, knee wheel, full-input yaw share, wheel, wheel / knee, speed, slip, lock, today's lock, formula / knee, verdict" % margin])
+	var cases: Array = []
+	for surf: StringName in [&"road", &"dirt", &"snow"]:
+		for sp: String in ["top", "half", "low"]:
+			cases.append([String(surf), surf, sp, 1.0])
+	for sp: String in ["top", "half"]:
+		cases.append(["split, turning right", &"split", sp, 1.0])
+		cases.append(["split, turning left", &"split", sp, -1.0])
+	var speeds := {"top": car.top_speed, "half": car.top_speed * 0.5, "low": car.top_speed * 0.27}
+	var fails := 0
+	for c: Array in cases:
+		var surf: StringName = c[1]
+		var dir: float = c[3]
+		var v: float = speeds[c[2]]
+		if surf == &"split":
+			gb.set_meta(&"surface", &"road")
+			car.test_surfaces = [&"snow", &"road", &"snow", &"road"] # left wheels on snow
+		else:
+			gb.set_meta(&"surface", surf)
+			car.test_surfaces = []
+		await _fs_setup("slider")
+		au.phone_set("grip_margin", 0.0)
+		var rows: Array[Dictionary] = []
+		var v0 := -1.0
+		var off_full: Dictionary = {}
+		for k in range(1, 26):
+			var r: Dictionary = await _fs_steady(dir * k * 0.04, v, 240, 60)
+			if v0 < 0.0:
+				v0 = r.v
+			var steady := float(r.v) >= 0.85 * v0 and float(r.slip) <= 12.0
+			file.append("  %s %s OFF %3.0f%%: wheel %.2f yaw %.1f slip %.1f v %.2f front %.2f rear %.2f%s" % [c[0], c[2], k * 4.0, r.wheel, r.yaw, r.slip, r.v, r.front, r.rear, "" if steady else " (not steady)"])
+			if steady:
+				rows.append(r)
+			off_full = r
+		_fs_release()
+		var best := 0.0
+		for r in rows:
+			best = maxf(best, float(r.yaw))
+		var knee: Dictionary = {}
+		for r in rows:
+			if float(r.yaw) >= 0.95 * best:
+				knee = r
+				break
+		au.phone_set("grip_margin", margin)
+		await _fs_setup("slider")
+		var full: Dictionary = await _fs_steady(dir * 1.0, v, 240, 60)
+		var formula := rad_to_deg(car.grip_limit_angle())
+		_fs_release()
+		var today := float(off_full.lock) # the lock at full input with the margin OFF (today's, with its counter-steer opening)
+		var share := float(full.yaw) / maxf(best, 0.01)
+		var ratio := float(full.wheel) / maxf(float(knee.get("wheel", 0.01)), 0.01)
+		var ok := share >= 0.95 and ratio <= 1.3 and float(full.lock) <= today + 0.05
+		if not ok:
+			fails += 1
+		var line := "%s %s: best yaw %.0f deg/s (knee wheel %.2f deg at %.1f u/s); full input: yaw %.0f deg/s = %.0f%% of best, wheel %.2f deg = %.2f x the knee's, %.1f u/s, slip %.1f deg, lock %.2f deg (today's %.2f); formula %.2f deg = %.2f x the knee's: %s" % [
+			c[0], c[2], best, float(knee.get("wheel", 0.0)), float(knee.get("v", 0.0)), full.yaw, share * 100.0, full.wheel, ratio, full.v, full.slip,
+			full.lock, today, formula, formula / maxf(float(knee.get("wheel", 0.01)), 0.01), "PASS" if ok else "FAIL"]
+		log_line("  " + line)
+		_m["grip %s %s" % [c[0], c[2]]] = line
+		file.append(line)
+	log_line("  %d of %d cases miss the target" % [fails, cases.size()])
+	_m["grip misses"] = "%d of %d" % [fails, cases.size()]
+	file.append("%d of %d cases miss the target" % [fails, cases.size()])
+	car.test_surfaces = []
+	gb.set_meta(&"surface", &"ground")
+	for k: String in keep:
+		au.phone_set(k, keep[k])
+	var fa := FileAccess.open(out_dir.path_join("mobile_grip.txt"), FileAccess.WRITE)
+	fa.store_string("\n".join(file) + "\n")
+	fa.close()
+
+
+## Hands-off laps with the steering assist (and the brake assist on, then off),
+## wheel-angle continuity through the assist's fades (air, off road, drift,
+## reverse), and keyboard / gamepad on the phone turning the aids off.
+func _test_mobile_assist() -> void:
+	log_line("\n[mobile assist] steering and brake assist")
+	if not Mobile.active() or game.touch == null:
+		log_line("  skipped: run with -- --mobile")
+		return
+	var au: AudioDirector = game.audio
+	var pa: PhoneAssist = game.phone_assist
+	var file := PackedStringArray(["# mobile_assist"])
+	var strength := 1.0
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--assiststrength="):
+			strength = arg.trim_prefix("--assiststrength=").to_float()
+	var laps_wanted := 3
+	var trace := OS.get_cmdline_user_args().has("--assisttrace")
+	var only := ""
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--feeltrack="):
+			only = arg.trim_prefix("--feeltrack=")
+	for tid: String in Tracks.ids():
+		if only != "" and tid != only:
+			continue
+		for brake_on: bool in ([true] if OS.get_cmdline_user_args().has("--assistbrakeonly") else [true, false]):
+			game.set_track(tid)
+			await _frames(10)
+			await _fs_setup("slider")
+			au.phone_set("steer_assist", strength)
+			au.phone_set("brake_assist", brake_on)
+			game.reset_to_grid()
+			car.player_input = true
+			await _frames(5)
+			var tr: Track = game.track
+			var laps: Array[float] = []
+			var offs: Array[float] = [tr.lateral_offset(car.global_position, game.laps.progress)]
+			var on_lap := func(t: float) -> void:
+				laps.append(t)
+				offs.append(tr.lateral_offset(car.global_position, game.laps.progress))
+			game.laps.lap_completed.connect(on_lap)
+			var off_frames := 0
+			var first_off := -1.0
+			var bad := 0.0
+			var would_reset := 0
+			var max_dw := 0.0
+			var max_dw_air := 0.0
+			var max_da := 0.0
+			var prev_a := car.phone_assist_angle
+			var clamp_n := 0
+			var clamp_max := 0.0
+			var clamp_at := PackedStringArray()
+			var prev_w := car.steer_angle
+			var prev_air := false
+			var air_n := 0
+			var min_lat := 99.0
+			var max_lat := -99.0
+			var wide := PackedStringArray()
+			var f := 0
+			while laps.size() < laps_wanted and f < 120 * 90:
+				await _frames(1)
+				f += 1
+				var air := car.wheels_grounded == 0
+				var dw := absf(car.steer_angle - prev_w)
+				max_dw = maxf(max_dw, dw)
+				max_da = maxf(max_da, absf(car.phone_assist_angle - prev_a))
+				prev_a = car.phone_assist_angle
+				# Did the assist alone ask for more than the (grip-limited) lock?
+				var over := absf(car.phone_assist_angle) - car.steer_lock
+				if over > 1e-5:
+					clamp_n += 1
+					if over > clamp_max:
+						clamp_max = over
+					if clamp_at.size() < 5 and (clamp_at.is_empty() or not clamp_at[-1].begins_with("s%.0f" % game.laps.progress)):
+						clamp_at.append("s%.0f +%.2f deg" % [game.laps.progress, rad_to_deg(over)])
+				if air or prev_air:
+					max_dw_air = maxf(max_dw_air, dw)
+				if air and not prev_air:
+					air_n += 1
+				prev_air = air
+				prev_w = car.steer_angle
+				var lat := tr.lateral_offset(car.global_position, game.laps.progress)
+				if trace and f % 30 == 0 and f < 120 * 14:
+					var vel := car.linear_velocity
+					vel.y = 0.0
+					var road := tr.tangent_at(game.laps.progress)
+					road.y = 0.0
+					log_line("    t %5.2f s %6.1f lat %+.2f k %+.3f err %+.1f assist %+.2f wheel %+.2f state %+.2f v %.1f thr %.2f plan %.1f fade %.2f on %d" % [f / 120.0,
+						game.laps.progress, lat, PhoneAssist._curvature(tr, game.laps.progress), rad_to_deg(vel.signed_angle_to(road, Vector3.DOWN)),
+						rad_to_deg(car.phone_assist_angle), rad_to_deg(car.steer_angle), car._steer_state, car.forward_speed, car.throttle_input, pa.plan_speed, pa.fade, car.wheels_on_road])
+				min_lat = minf(min_lat, lat)
+				max_lat = maxf(max_lat, lat)
+				if car.wheels_grounded > car.wheels_on_road:
+					off_frames += 1
+					if first_off < 0.0:
+						first_off = game.laps.progress
+					if wide.size() < 6 and (wide.is_empty() or absf(float(wide[-1].split(" ")[0].trim_prefix("s")) - game.laps.progress) > 3.0):
+						wide.append("s%.1f (%.1f u/s, plan %.1f)" % [game.laps.progress, car.forward_speed, pa.plan_speed])
+				if absf(lat) > Track.ROAD_HALF_WIDTH + 0.5 or absf(car.forward_speed) < 0.3:
+					bad += 1.0 / 120.0
+				else:
+					bad = 0.0
+				if bad > 2.0:
+					would_reset += 1
+					bad = -999.0 # count once; no reset (hands off)
+			game.laps.lap_completed.disconnect(on_lap)
+			var drift := PackedStringArray()
+			for i in range(1, offs.size()):
+				drift.append("%+.2f" % (offs[i] - offs[i - 1]))
+			var ap_ref := {"figure_eight": 16.8, "dust_bowl": 18.55, "frost_pass": 21.27}
+			var mean_lap := 0.0
+			for t in laps:
+				mean_lap += t
+			mean_lap = mean_lap / maxf(laps.size(), 1.0)
+			var line := "%s, assist %.2f, brake assist %s: laps %d %s (mean %.2f s, %+.0f%% against Autopilot %.2f), wheel off the road %d frames (%.2f s)%s, would-reset %d, offset at each lap line %s (drift per lap %s), offset range %+.2f..%+.2f u, largest wheel change per step %.2f deg (in or next to the air %.2f deg, %d take-offs), largest assist change per step %.2f deg; assist above the grip lock in %d steps (most %.2f deg%s)" % [
+				tid, strength, "on" if brake_on else "off", laps.size(), str(laps.map(func(t: float) -> String: return "%.2f" % t)), mean_lap,
+				(mean_lap / ap_ref.get(tid, mean_lap) - 1.0) * 100.0, ap_ref.get(tid, 0.0), off_frames, off_frames / 120.0,
+				(" first at s %.1f; at %s" % [first_off, ", ".join(wide)]) if off_frames > 0 else "", would_reset,
+				str(offs.map(func(o: float) -> String: return "%+.2f" % o)), ", ".join(drift), min_lat, max_lat, rad_to_deg(max_dw), rad_to_deg(max_dw_air), air_n, rad_to_deg(max_da), clamp_n, rad_to_deg(clamp_max), (", at " + ", ".join(clamp_at)) if clamp_n > 0 else ""]
+			log_line("  " + line)
+			_m["assist %s brake %s" % [tid, "on" if brake_on else "off"]] = line
+			file.append(line)
+	game.set_track(Tracks.DEFAULT_ID)
+	await _frames(10)
+	# Fades: drift (handbrake key), reverse (BRAKE at a standstill), off the road;
+	# the wheel angle per step through each, and the fade.
+	au.phone_set("steer_assist", 1.0)
+	au.phone_set("brake_assist", false)
+	await _fs_setup("slider")
+	var fades := PackedStringArray()
+	for case: String in ["drift", "off road", "reverse"]:
+		match case:
+			"drift":
+				await _place_on_track(118.0, 0.0, 7.0) # into the hairpin
+			"off road":
+				await _place_on_track(15.0, 0.0, 9.0)
+				car.linear_velocity = car.linear_velocity.rotated(Vector3.UP, deg_to_rad(-25.0))
+			"reverse":
+				await _place_on_track(15.0, 0.0, 0.0)
+		car.player_input = true
+		var prev := car.steer_angle
+		var mx := 0.0
+		var pa_prev := car.phone_assist_angle
+		var mxa := 0.0
+		var fmin := 1.0
+		var fmax := 0.0
+		for fr in 240:
+			if case == "drift":
+				_key(KEY_SPACE, fr >= 20 and fr < 140)
+			elif case == "reverse":
+				_fs_set_brake(fr >= 10)
+			await _frames(1)
+			mx = maxf(mx, absf(car.steer_angle - prev))
+			prev = car.steer_angle
+			mxa = maxf(mxa, absf(car.phone_assist_angle - pa_prev))
+			pa_prev = car.phone_assist_angle
+			fmin = minf(fmin, pa.fade)
+			fmax = maxf(fmax, pa.fade)
+		_key(KEY_SPACE, false)
+		_fs_set_brake(false)
+		fades.append("%s: fade %.2f..%.2f, largest wheel change per step %.2f deg, of the assist's own angle %.2f deg" % [case, fmin, fmax, rad_to_deg(mx), rad_to_deg(mxa)])
+	# Full input held through a corner with assist 1: the player's part plus the
+	# assist never beyond the lock (Figure Eight's first right-hander).
+	await _fs_setup("slider")
+	au.phone_set("steer_assist", 1.0)
+	await _place_on_track(33.0, 0.0, 9.0)
+	car.player_input = true
+	_fs_input(1.0)
+	var worst := -99.0
+	var req_max := 0.0
+	for fr in 240:
+		await _frames(1)
+		worst = maxf(worst, absf(car.steer_request_angle) - car.steer_lock)
+		req_max = maxf(req_max, absf(car.steer_request_angle))
+	_fs_release()
+	fades.append("full input + assist 1 through a corner: largest request %.2f deg, request minus lock at most %+.4f deg (never above: %s)" % [rad_to_deg(req_max), rad_to_deg(worst), worst <= 1e-6])
+	# Wrong way: facing backwards on a straight, hands off: no assist.
+	await _place_on_track(10.0, 0.0, 0.0)
+	car.teleport(Transform3D(car.global_basis.rotated(Vector3.UP, PI), car.global_position))
+	car.player_input = false # a clean start: the previous case's assist fades out first
+	await _frames(60)
+	car.player_input = true
+	var wrong_max := 0.0
+	var fade_max := 0.0
+	for fr in 360:
+		await _frames(1)
+		wrong_max = maxf(wrong_max, absf(car.phone_assist_angle))
+		fade_max = maxf(fade_max, pa.fade)
+		if fr % 30 == 0:
+			log_line("    wrong way t %.2f: v %.1f, heading error %.0f deg, fade %.2f, assist %.2f deg, s %.1f, on road %d" % [fr / 120.0, car.forward_speed,
+				rad_to_deg(pa._heading_error(game.track, pa._s)), pa.fade, rad_to_deg(car.phone_assist_angle), pa._s, car.wheels_on_road])
+	fades.append("facing backwards, hands off, 3 s (moving %.1f u/s at the end): assist angle at most %.3f deg, fade at most %.2f" % [car.forward_speed, rad_to_deg(wrong_max), fade_max])
+	# Keyboard and gamepad on the phone: aids off (today's lock, assist faded out).
+	await _place_on_track(30.0, 0.0, 9.0)
+	await _frames(30)
+	var aids_touch := "touch: active %s, margin %.2f, lock %.2f deg" % [pa.active, car.phone_grip_margin, rad_to_deg(car.steer_lock)]
+	_key(KEY_D, true)
+	await _frames(60)
+	var aids_key := "key D held: active %s, margin %.2f, lock %.2f deg (today's %.2f), assist %.2f deg" % [pa.active, car.phone_grip_margin, rad_to_deg(car.steer_lock),
+		lerpf(car.max_steer_low_deg, car.max_steer_high_deg, clampf(car.forward_speed / car.top_speed, 0.0, 1.0)), rad_to_deg(car.phone_assist_angle)]
+	_key(KEY_D, false)
+	fades.append(aids_touch)
+	fades.append(aids_key)
+	fades.append("gamepad: PhoneAssist turns the aids off while TiltInput._pad_x() is not 0 (a moved left stick); not injectable here")
+	for x in fades:
+		log_line("  " + x)
+		file.append(x)
+	_m["assist fades"] = "; ".join(fades)
+	game.audio.phone_set("steer_assist", Mobile.STEER_ASSIST_DEFAULT)
+	game.audio.phone_set("brake_assist", Mobile.BRAKE_ASSIST_DEFAULT)
+	car.player_input = false
+	var fa := FileAccess.open(out_dir.path_join("mobile_assist.txt"), FileAccess.WRITE)
+	fa.store_string("\n".join(file) + "\n")
+	fa.close()
+
+
+
+## --drvconfigs=factor: the phone aids one after another (all off with the old
+## slider travel; + grip-limited lock; + the new travel; + steering assist 0.5;
+## + brake assist = the new defaults). --drvconfigs=assist: steering assist 0,
+## 0.25, 0.5, 0.75 and 1 with the other new defaults. The coarse driver (DRV_*)
+## on SLIDER, every circuit; the factor study with both of its braking policies.
+func _drv_configs(kind: String) -> void:
+	var au: AudioDirector = game.audio
+	var configs: Array = []
+	var off := {"grip_margin": 0.0, "sens_slider": 2.0, "steer_assist": 0.0, "brake_assist": false}
+	if kind == "factor":
+		configs.append(["all off, old travel", off])
+		configs.append(["+ grip-limited lock", {"grip_margin": Mobile.GRIP_MARGIN_DEFAULT, "sens_slider": 2.0, "steer_assist": 0.0, "brake_assist": false}])
+		configs.append(["+ new slider travel", {"grip_margin": Mobile.GRIP_MARGIN_DEFAULT, "sens_slider": 1.0, "steer_assist": 0.0, "brake_assist": false}])
+		configs.append(["+ steering assist 0.5", {"grip_margin": Mobile.GRIP_MARGIN_DEFAULT, "sens_slider": 1.0, "steer_assist": 0.5, "brake_assist": false}])
+		configs.append(["+ brake assist (new defaults)", {"grip_margin": Mobile.GRIP_MARGIN_DEFAULT, "sens_slider": 1.0, "steer_assist": 0.5, "brake_assist": true}])
+	elif kind == "gain":
+		# A late driver who lets the assist work: lower driver gains with the assist.
+		for g: float in [1.3, 0.65, 0.45]:
+			for a: float in [0.0, 0.5, 1.0]:
+				configs.append(["gain %.2f, assist %.1f" % [g, a], {"grip_margin": Mobile.GRIP_MARGIN_DEFAULT, "sens_slider": 1.0, "steer_assist": a, "brake_assist": true}, g])
+	else:
+		for a: float in [0.0, 0.25, 0.5, 0.75, 1.0]:
+			configs.append(["steering assist %.2f" % a, {"grip_margin": Mobile.GRIP_MARGIN_DEFAULT, "sens_slider": 1.0, "steer_assist": a, "brake_assist": true}])
+	var policies: Array = [false, true] if kind == "factor" else [false]
+	var schemes: Array = ["slider", "tilt"] if kind == "gain" else ["slider"]
+	var file := PackedStringArray(["# mobile_laps --drvconfigs=%s: coarse driver on SLIDER" % kind,
+		"circuit\tconfig\tdriver brakes\tlaps\tlap times\toff-road share\tresets\treversals/min\trms offset"])
+	for tid: String in Tracks.ids():
+		game.set_track(tid)
+		await _frames(10)
+		var pairs: Array = []
+		for sch_i: String in schemes:
+			for cfg: Array in configs:
+				pairs.append([sch_i, cfg])
+		for pc: Array in pairs:
+			var sch: String = pc[0]
+			var c: Array = pc[1]
+			for braking: bool in policies:
+				for k: String in c[1]:
+					au.phone_set(k, c[1][k])
+				var r: Dictionary = await _drv_run(sch, braking, true, -1.0, -1.0, -1, c[2] if c.size() > 2 else 1.3)
+				var lt: Array = r.laps
+				var line := "%s %s %s, driver %s: laps %d %s, off-road %.0f%%, resets %d, reversals %.0f/min, rms offset %.2f u" % [tid, sch.to_upper(), c[0],
+					"brakes" if braking else "never brakes", lt.size(), str(lt.map(func(t: float) -> String: return "%.2f" % t)), r.off * 100.0, r.resets, r.rev_min, r.rms]
+				log_line("  " + line)
+				_m["configs %s %s %s %s %s" % [kind, tid, sch, c[0], "brakes" if braking else "nobrake"]] = line
+				file.append("%s\t%s %s\t%s\t%d\t%s\t%.3f\t%d\t%.0f\t%.2f" % [tid, sch, c[0], "yes" if braking else "no", lt.size(),
+					",".join(lt.map(func(t: float) -> String: return "%.2f" % t)), r.off, r.resets, r.rev_min, r.rms])
+	for k: String in off:
+		au.phone_set(k, {"grip_margin": Mobile.GRIP_MARGIN_DEFAULT, "sens_slider": 1.0, "steer_assist": Mobile.STEER_ASSIST_DEFAULT, "brake_assist": Mobile.BRAKE_ASSIST_DEFAULT}[k])
+	game.set_track(Tracks.DEFAULT_ID)
+	car.player_input = false
+	var fa := FileAccess.open(out_dir.path_join("mobile_laps_%s.txt" % kind), FileAccess.WRITE)
+	fa.store_string("\n".join(file) + "\n")
+	fa.close()
+
+
+
+## The driving aids' rows: pages (row counts and pitch per scheme), MORE / BACK
+## and the back button, each value stepped by tap, saved and read back by a
+## fresh load, and taking effect on resume.
+func _mobile_aids_menu() -> void:
+	var au: AudioDirector = game.audio
+	var pm: PauseMenu = game.pause_menu
+	var pa: PhoneAssist = game.phone_assist
+	var out := PackedStringArray()
+	car.player_input = true
+	await _place_on_track(30.0, 0.0, 8.0)
+	var cell_px := func() -> Vector2:
+		return Vector2(renderer.pitch) * get_viewport().get_visible_rect().size / Vector2(renderer.output_size)
+	var row_tap := func(item: int, right: bool) -> Vector2:
+		for h: Array in pm._hits:
+			if pm.items[h[1]] == item:
+				var cw: Vector2 = cell_px.call()
+				var x := (int(h[2]) + (9 if right else 1)) * cw.x if pm.PHONE_VALUE_ITEMS.has(item) else (int((h[0] as Rect2i).position.x) + 6) * cw.x
+				return Vector2(x, ((h[0] as Rect2i).position.y + 0.5) * cw.y)
+		return Vector2(-1.0, -1.0)
+	for sch: String in ["slider", "tilt", "buttons"]:
+		au.phone_set("controls", sch)
+		pm.open(false)
+		await _frames(30)
+		var p1 := pm.items.map(func(it: int) -> String: return PauseMenu.LABELS[it])
+		var pitch1 := float(pm._hits[1][0].position.y - pm._hits[0][0].position.y) * (cell_px.call() as Vector2).y
+		var more: Vector2 = row_tap.call(PauseMenu.Item.MORE, false)
+		_mouse(more, true)
+		_mouse(more, false)
+		await _frames(30)
+		var p2 := pm.items.map(func(it: int) -> String: return PauseMenu.LABELS[it])
+		var pitch2 := float(pm._hits[1][0].position.y - pm._hits[0][0].position.y) * (cell_px.call() as Vector2).y
+		game.mobile_back() # page 2 -> page 1
+		await _frames(10)
+		var back_ok: bool = pm.is_open and pm.page == 1
+		pm.close()
+		await _frames(5)
+		out.append("%s: page 1 %d rows %s, pitch %.0f px; page 2 %d rows %s, pitch %.0f px (at %d high); back on page 2 -> page 1 %s" % [sch.to_upper(),
+			p1.size(), str(p1), pitch1, p2.size(), str(p2), pitch2, get_window().size.y, back_ok])
+	# Each value by tap (right half = up), then saved and read back.
+	au.phone_set("controls", "slider")
+	pm.open(false)
+	await _frames(30)
+	var before := {}
+	for k: String in ["sens_slider", "steer_assist", "brake_assist"]:
+		before[k] = au.phone_get(k, null)
+	for it: int in [PauseMenu.Item.SENS, PauseMenu.Item.STEER_ASSIST, PauseMenu.Item.BRAKE_ASSIST]:
+		var pt: Vector2 = row_tap.call(it, true)
+		_mouse(pt, true)
+		_mouse(pt, false)
+		await _frames(5)
+	var more2: Vector2 = row_tap.call(PauseMenu.Item.MORE, false)
+	_mouse(more2, true)
+	_mouse(more2, false)
+	await _frames(30)
+	for it: int in [PauseMenu.Item.GRIP, PauseMenu.Item.CORNER]:
+		var pt: Vector2 = row_tap.call(it, false) # left half = down
+		_mouse(pt, true)
+		_mouse(pt, false)
+		await _frames(5)
+	var after := {}
+	for k: String in ["sens_slider", "steer_assist", "brake_assist", "grip_margin", "corner_speed"]:
+		after[k] = au.phone_get(k, null)
+	pm.close()
+	await _frames(3) # resumed: the aids read the new values on the next step
+	var applied := "car margin %.2f (set %.2f), slider travel %.0f px (sensitivity %.1f)" % [car.phone_grip_margin, float(after.grip_margin),
+		(game.touch as TouchControls).slider_travel(), float(after.sens_slider)]
+	var fresh := AudioDirector.new()
+	fresh.settings_path = au.settings_path
+	fresh.load_settings()
+	var loaded := {}
+	for k: String in after:
+		loaded[k] = fresh.phone_get(k, null)
+	fresh.free()
+	out.append("taps: %s -> %s; after resume: %s; a fresh load reads %s (same %s)" % [str(before), str(after), applied, str(loaded), str(loaded) == str(after)])
+	# GRIP MARGIN down to OFF and back up.
+	au.phone_set("grip_margin", Mobile.GRIP_MARGIN_RANGE.x)
+	pm.open(false)
+	await _frames(30)
+	pm.set_page(2)
+	await _frames(20)
+	var gpt: Vector2 = row_tap.call(PauseMenu.Item.GRIP, false)
+	_mouse(gpt, true)
+	_mouse(gpt, false)
+	await _frames(5)
+	var g_off: float = au.phone_get("grip_margin", -1.0)
+	_mouse(gpt + Vector2((cell_px.call() as Vector2).x * 8.0, 0.0), true)
+	_mouse(gpt + Vector2((cell_px.call() as Vector2).x * 8.0, 0.0), false)
+	await _frames(5)
+	out.append("GRIP MARGIN: from %.2f down -> %s, up again -> %.2f" % [Mobile.GRIP_MARGIN_RANGE.x, "OFF" if g_off <= 0.0 else str(g_off), float(au.phone_get("grip_margin", -1.0))])
+	pm.close()
+	for k: String in ["sens_slider", "steer_assist", "brake_assist", "grip_margin", "corner_speed"]:
+		au.phone_set(k, {"sens_slider": Mobile.SENSITIVITY_DEFAULT, "steer_assist": Mobile.STEER_ASSIST_DEFAULT, "brake_assist": Mobile.BRAKE_ASSIST_DEFAULT,
+			"grip_margin": Mobile.GRIP_MARGIN_DEFAULT, "corner_speed": Mobile.CORNER_SPEED_DEFAULT}[k])
+	au.save_settings()
+	for x in out:
+		log_line("  AIDS " + x)
+	_m["controls aids menu"] = "; ".join(out)
+
+
+
+## Phone screenshots for the driving aids (with --mobile --mobilewin=1600x720):
+## SLIDER driving with a thumb down, BUTTONS driving with a finger on >, the
+## pause menu's pages 1 and 2 for SLIDER and for TILT.
+func _test_mobile_aids_shots() -> void:
+	log_line("\n[mobile aids shots]")
+	if not Mobile.active() or game.touch == null:
+		log_line("  skipped: run with -- --mobile")
+		return
+	renderer.fixed_output_size = Vector2i.ZERO
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--mobilewin="):
+			var wh := arg.trim_prefix("--mobilewin=").split("x")
+			get_window().size = Vector2i(wh[0].to_int(), wh[1].to_int())
+			await _frames(30)
+	var tag := "%dx%d_%s" % [get_window().size.x, get_window().size.y, "gl" if renderer.compat else "fp"]
+	var pm: PauseMenu = game.pause_menu
+	game.set_chase_view(true)
+	car.player_input = true
+	for sch: String in ["slider", "buttons"]:
+		await _fs_setup(sch)
+		await _place_on_track(30.0, 0.0, 8.0)
+		await _frames(30)
+		_fs_input(0.35)
+		await _frames(30)
+		await _shot_full("%s_%s_driving.png" % [tag, sch])
+		_fs_release()
+	for sch: String in ["slider", "tilt"]:
+		await _fs_setup(sch)
+		await _frames(10)
+		pm.open(false)
+		await _frames(30)
+		await _shot_full("%s_pause_%s_page1.png" % [tag, sch])
+		pm.set_page(2)
+		await _frames(30)
+		await _shot_full("%s_pause_%s_page2.png" % [tag, sch])
+		pm.close()
+		await _frames(10)
+	game.audio.phone_set("controls", Mobile.CONTROLS[0])
+	car.player_input = false

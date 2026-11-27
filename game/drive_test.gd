@@ -169,7 +169,7 @@ func _run() -> void:
 		if arg.begins_with("--dtonly="):
 			only = arg.trim_prefix("--dtonly=")
 	for t: String in ["spawn", "accel_brake", "corners", "limit", "nitro", "nitro_shots", "turns", "handbrake", "drift", "feel", "offroad", "kerbs", "tree", "cones", "jump", "bridge", "reset_bridge", "keys",
-			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting", "level_select", "tracks", "camera_blend", "time_of_day", "dirt_feel", "dust_tour", "abuse", "opp_trace", "bank_iso", "key_steer", "glyph_table", "mobile", "mobile_shots", "mobile_level", "mobile_controls"]:
+			"pad", "panel", "rumble", "lap", "drift_lap", "demo_laps", "drift_shot", "panel_shot", "halo", "chase", "lighting", "glint", "sweep", "top_down", "grid_snap", "light_stability", "light_fps", "light_roundtrip", "glint_lap", "audio", "pause", "opp_laps", "opp_block", "opp_shove", "opp_start", "opp_menu", "opp_shots", "countdown", "view_ahead", "night", "hud_shots", "camera_motion", "gate", "camera_tip", "glyph_setting", "level_select", "tracks", "camera_blend", "time_of_day", "dirt_feel", "dust_tour", "abuse", "opp_trace", "bank_iso", "key_steer", "glyph_table", "mobile", "mobile_shots", "mobile_level", "mobile_controls", "mobile_feel", "mobile_laps"]:
 		if only == "" or t in only.split(","):
 			await call("_test_" + t)
 	log_line("\n[summary] preset %s" % game.tuning.current)
@@ -6255,3 +6255,575 @@ func _test_mobile_controls() -> void:
 	_m["controls menu"] = "; ".join(rows)
 	gb.set_meta(&"surface", &"ground")
 	tl.test_roll_deg = NAN
+
+
+
+# --- phone control feel: measurements (run with -- --mobile) ------------------------------
+# Each scheme is driven through the layer TouchControls / TiltInput feed the car:
+# TILT by the desktop tilt simulation (TiltInput.test_roll_deg: gravity, its
+# filter, dead zone and curve), SLIDER by an injected touch and drags, BUTTONS
+# by touches on < / >, SPLIT by touches on the screen halves. So the same test
+# measures the schemes after they change.
+
+## Phone height (landscape, mm) assumed to turn slider travel into mm: a 6.5 in 20:9 phone.
+const FEEL_PHONE_MM: float = 68.0
+## Touch indices the feel tests use.
+const FEEL_SLIDER_FINGER: int = 5
+const FEEL_LEFT_FINGER: int = 6
+const FEEL_RIGHT_FINGER: int = 7
+const FEEL_BRAKE_FINGER: int = 8
+
+var _fs_scheme: String = ""
+var _fs_slider_origin := Vector2(-1.0, -1.0)
+var _fs_keys := Vector2i.ZERO # (left held, right held)
+var _fs_brake: bool = false
+var _fs_brake_split: bool = false
+
+
+func _fs_travel() -> float:
+	return TouchControls.SLIDER_TRAVEL * get_viewport().get_visible_rect().size.y
+
+
+## Switches the phone's CONTROLS scheme (level display off: it does not change the driving).
+func _fs_setup(scheme: String) -> void:
+	_fs_release()
+	game.audio.phone_set("controls", scheme)
+	game.audio.phone_set("level", false)
+	game.tilt.test_roll_deg = 0.0
+	_fs_scheme = scheme
+	await _frames(3)
+
+
+## Steering input for the current scheme through its touch / tilt layer:
+## TILT: degrees of roll; SLIDER: signed share of full travel (finger kept
+## down); BUTTONS / SPLIT: -1 / 0 / +1 (the < / > buttons or the halves).
+func _fs_input(value: float) -> void:
+	var tc: TouchControls = game.touch
+	match _fs_scheme:
+		"tilt":
+			game.tilt.test_roll_deg = value
+		"slider":
+			var zone: Rect2 = tc.rects().zone
+			if _fs_slider_origin.x < 0.0:
+				_fs_slider_origin = Vector2(zone.position.x + zone.size.x * 0.5, zone.position.y + zone.size.y * 0.3)
+				_touch(FEEL_SLIDER_FINGER, _fs_slider_origin, true)
+			_drag(FEEL_SLIDER_FINGER, _fs_slider_origin + Vector2(value * _fs_travel(), 0.0))
+		"buttons", "split":
+			var want := Vector2i(1 if value < -0.5 else 0, 1 if value > 0.5 else 0)
+			if _fs_brake_split:
+				want = Vector2i.ONE # SPLIT brakes with both halves
+			_fs_set_keys(want)
+
+
+func _fs_set_keys(want: Vector2i) -> void:
+	var r := (game.touch as TouchControls).rects()
+	var win := get_viewport().get_visible_rect().size
+	var pts: Array[Vector2] = []
+	if _fs_scheme == "buttons":
+		pts = [(r.left as Rect2).get_center(), (r.right as Rect2).get_center()]
+	else:
+		pts = [Vector2(win.x * 0.25, win.y * 0.45), Vector2(win.x * 0.75, win.y * 0.45)]
+	for i in 2:
+		if want[i] != _fs_keys[i]:
+			_touch(FEEL_LEFT_FINGER + i, pts[i], want[i] == 1)
+	_fs_keys = want
+
+
+## BRAKE through the scheme's control (SPLIT: both halves, steering straight).
+func _fs_set_brake(on: bool) -> void:
+	if _fs_scheme == "split":
+		if on != _fs_brake_split:
+			_fs_brake_split = on
+			_fs_set_keys(Vector2i.ONE if on else Vector2i.ZERO)
+		return
+	if on != _fs_brake:
+		_fs_brake = on
+		_touch(FEEL_BRAKE_FINGER, ((game.touch as TouchControls).rects().brake as Rect2).get_center(), on)
+
+
+func _fs_release() -> void:
+	if _fs_slider_origin.x >= 0.0:
+		_touch(FEEL_SLIDER_FINGER, _fs_slider_origin, false)
+		_fs_slider_origin = Vector2(-1.0, -1.0)
+	for i in 2:
+		if _fs_keys[i] == 1:
+			_touch(FEEL_LEFT_FINGER + i, Vector2.ZERO, false)
+	_fs_keys = Vector2i.ZERO
+	_fs_brake_split = false
+	if _fs_brake:
+		_touch(FEEL_BRAKE_FINGER, Vector2.ZERO, false)
+		_fs_brake = false
+	if game.tilt != null:
+		game.tilt.test_roll_deg = 0.0
+
+
+## Holds about speed v with the throttle action (flat out when v is the top
+## speed, as the automatic throttle does; proportional below it).
+func _fs_hold_speed(v: float) -> void:
+	if v >= car.top_speed - 0.01:
+		Input.action_press(&"throttle", 1.0)
+		return
+	var thr := clampf((v - car.forward_speed) * 1.5 + 0.25, 0.0, 1.0)
+	if thr > 0.0:
+		Input.action_press(&"throttle", thr)
+	else:
+		Input.action_release(&"throttle")
+
+
+## Steady state at one input: settle `settle` frames holding speed v, then
+## average `measure` frames. Wheel angle, yaw rate, lateral acceleration
+## (speed x yaw rate), body slip, speed, front / rear grip use, wheels off.
+func _fs_steady(value: float, v: float, settle: int = 240, measure: int = 60) -> Dictionary:
+	var pad: Vector3 = (game.track as Track).bounds.end + Vector3(30.0, 0.0, 30.0)
+	pad.y = 0.0
+	await _place(pad, Vector3(1.0, 0.0, 0.0), v)
+	_fs_input(value)
+	var acc := {"wheel": 0.0, "yaw": 0.0, "lat": 0.0, "slip": 0.0, "v": 0.0, "front": 0.0, "rear": 0.0, "lock": 0.0}
+	for f in settle + measure:
+		_fs_hold_speed(v)
+		await _frames(1)
+		if f >= settle:
+			var yaw := absf(car.angular_velocity.y)
+			acc.wheel += absf(rad_to_deg(car.steer_angle))
+			acc.yaw += rad_to_deg(yaw)
+			acc.lat += car.forward_speed * yaw
+			acc.slip += absf(rad_to_deg(car.slip_angle))
+			acc.v += car.forward_speed
+			acc.front += (car.wheel_usage[0] + car.wheel_usage[1]) * 0.5
+			acc.rear += (car.wheel_usage[2] + car.wheel_usage[3]) * 0.5
+			acc.lock += rad_to_deg(car.steer_lock)
+	for k: String in acc:
+		acc[k] = float(acc[k]) / measure
+	return acc
+
+
+## Part A, B and D: grip limit by sweeping TILT and SLIDER at three speeds, the
+## key path's time to that angle and to full lock, the time to leave a
+## straight for small inputs, and the parameter facts.
+func _test_mobile_feel() -> void:
+	log_line("\n[mobile feel] phone control schemes, measured through their input layers (phone height %.0f mm assumed)" % FEEL_PHONE_MM)
+	if not Mobile.active() or game.touch == null:
+		log_line("  skipped: run with -- --mobile")
+		return
+	var gb: StaticBody3D = (game.track as Track).ground_body
+	gb.set_meta(&"surface", &"road")
+	car.player_input = true
+	var travel_mm := TouchControls.SLIDER_TRAVEL * FEEL_PHONE_MM
+	var file := PackedStringArray()
+	file.append("# mobile_feel: window %s, slider travel %.0f px = %.1f mm (phone %.0f mm high)" % [get_viewport().get_visible_rect().size, _fs_travel(), travel_mm, FEEL_PHONE_MM])
+	var speeds: Array = [["top", car.top_speed], ["half", car.top_speed * 0.5], ["low", car.top_speed * 0.27]]
+	var knees := {}
+	# --- A: sweeps.
+	file.append("\n## A. steady-state sweeps (input -> wheel deg, yaw deg/s, lat acc u/s^2, slip deg, speed held, front/rear grip use, lock deg)")
+	for vs: Array in speeds:
+		var v: float = vs[1]
+		for scheme: String in ["tilt", "slider"]:
+			await _fs_setup(scheme)
+			var values: Array[float] = []
+			if scheme == "tilt":
+				for d in range(2, 31):
+					values.append(float(d))
+				values.push_front(1.5)
+			else:
+				for k in range(1, 26):
+					values.append(k * 0.04)
+			var rows: Array[Dictionary] = []
+			for x: float in values:
+				var r: Dictionary = await _fs_steady(x, v)
+				r["x"] = x
+				rows.append(r)
+				file.append("%s %s %s: wheel %.2f yaw %.1f lat %.2f slip %.2f v %.2f front %.2f rear %.2f lock %.2f" % [
+					vs[0], scheme, ("%.1f deg" % x) if scheme == "tilt" else ("%.0f%% (%.1f mm)" % [x * 100.0, x * travel_mm]),
+					r.wheel, r.yaw, r.lat, r.slip, r.v, r.front, r.rear, r.lock])
+			_fs_release()
+			# Knee: the first input reaching 95 % of the highest yaw rate; the peak.
+			var ymax := 0.0
+			var ipk := 0
+			for i in rows.size():
+				if float(rows[i].yaw) > ymax:
+					ymax = rows[i].yaw
+					ipk = i
+			var i95 := 0
+			while i95 < rows.size() and float(rows[i95].yaw) < 0.95 * ymax:
+				i95 += 1
+			var k95: Dictionary = rows[mini(i95, rows.size() - 1)]
+			var kpk: Dictionary = rows[ipk]
+			var last: Dictionary = rows[-1]
+			var unit := func(x: float) -> String:
+				return ("%.1f deg tilt (share %.0f%%)" % [x, x / TiltInput.FULL_LOCK_DEG * 100.0]) if scheme == "tilt" \
+					else ("%.0f%% travel (%.1f mm)" % [x * 100.0, x * travel_mm])
+			var past := "past it: wheel %.1f -> %.1f deg, yaw %.0f -> %.0f deg/s, slip %.1f -> %.1f deg, front use %.2f -> %.2f, rear %.2f -> %.2f, speed %.2f -> %.2f" % [
+				kpk.wheel, last.wheel, kpk.yaw, last.yaw, kpk.slip, last.slip, kpk.front, last.front, kpk.rear, last.rear, kpk.v, last.v]
+			var line := "%s (%.1f u/s target) %s: lock %.2f deg; yaw 95%% of max (%.0f deg/s) at %s, wheel %.2f deg, lat %.2f u/s^2, slip %.1f deg; peak at %s, wheel %.2f deg; %s" % [
+				vs[0], v, scheme.to_upper(), k95.lock, ymax, unit.call(float(k95.x)), k95.wheel, k95.lat, k95.slip, unit.call(float(kpk.x)), kpk.wheel, past]
+			log_line("  A " + line)
+			_m["feel A %s %s" % [vs[0], scheme]] = line
+			if scheme == "tilt":
+				knees[vs[0]] = k95.wheel
+	# Key path (BUTTONS, SPLIT): time to the knee's wheel angle and to full lock.
+	file.append("\n## A. key path: press to the grip-limit wheel angle and to full lock")
+	for scheme: String in ["buttons", "split"]:
+		await _fs_setup(scheme)
+		var parts := PackedStringArray()
+		for vs: Array in speeds:
+			var v: float = vs[1]
+			var pad: Vector3 = (game.track as Track).bounds.end + Vector3(30.0, 0.0, 30.0)
+			pad.y = 0.0
+			await _place(pad, Vector3(1.0, 0.0, 0.0), v)
+			await _frames(2)
+			car._steer_state = 0.0
+			_fs_input(1.0)
+			var t_knee := -1.0
+			var n := 0
+			while car._steer_state < 0.999 and n < 240:
+				_fs_hold_speed(v)
+				await _frames(1)
+				n += 1
+				if t_knee < 0.0 and absf(rad_to_deg(car.steer_angle)) >= float(knees[vs[0]]):
+					t_knee = n / 120.0
+			_fs_release()
+			await _frames(30)
+			parts.append("%s: to the grip limit (%.2f deg) %.3f s, to full lock %.3f s" % [vs[0], knees[vs[0]], t_knee, n / 120.0])
+		var line := "%s %s" % [scheme.to_upper(), "; ".join(parts)]
+		log_line("  A " + line)
+		file.append(line)
+		_m["feel A keys %s" % scheme] = line
+	# --- B: leaving a straight (virtual road 2.7 u wide, the circuits' width, on the pad).
+	file.append("\n## B. leaving a straight at top speed (road half width %.2f u)" % Track.ROAD_HALF_WIDTH)
+	var cases: Array = [["tilt", [2.0, 3.0, 5.0, 8.0, 12.0]], ["slider", [0.05, 0.10, 0.15, 0.25, 0.40]], ["buttons", [-100.0, -200.0, -300.0, 0.0]]]
+	for c: Array in cases:
+		var scheme: String = c[0]
+		await _fs_setup(scheme)
+		for x: float in c[1]:
+			var pad: Vector3 = (game.track as Track).bounds.end + Vector3(30.0, 0.0, 30.0)
+			pad.y = 0.0
+			await _place(pad, Vector3(1.0, 0.0, 0.0), car.top_speed)
+			await _frames(2)
+			var z0 := car.global_position.z
+			var tap := int(-x * 0.12) if x < 0.0 else 0 # BUTTONS: tap frames (100 ms = 12)
+			var offs := {}
+			var t_out := -1.0
+			for f in 600:
+				if scheme == "buttons":
+					_fs_input(1.0 if (x == 0.0 or f < tap) else 0.0)
+				elif f == 0:
+					_fs_input(x)
+				Input.action_press(&"throttle", 1.0)
+				await _frames(1)
+				var off := car.global_position.z - z0
+				for tt: float in [0.25, 0.5, 1.0]:
+					if f + 1 == roundi(tt * 120.0):
+						offs[tt] = off
+				if t_out < 0.0 and absf(off) > Track.ROAD_HALF_WIDTH:
+					t_out = (f + 1) / 120.0
+				if t_out >= 0.0 and f + 1 >= 120:
+					break
+			_fs_release()
+			var label := ""
+			match scheme:
+				"tilt": label = "TILT %.0f deg" % x
+				"slider": label = "SLIDER %.0f%% (%.1f mm)" % [x * 100.0, x * travel_mm]
+				"buttons": label = ("BUTTONS tap %d ms" % roundi(-x)) if x < 0.0 else "BUTTONS hold"
+			var line := "%s: offset after 0.25 s %.2f u, 0.5 s %.2f u, 1.0 s %.2f u; leaves the road (|offset| > %.2f) after %s" % [label,
+				offs.get(0.25, 0.0), offs.get(0.5, 0.0), offs.get(1.0, 0.0), Track.ROAD_HALF_WIDTH, ("%.2f s" % t_out) if t_out >= 0.0 else "> 5 s"]
+			log_line("  B " + line)
+			file.append(line)
+			_m["feel B %s" % label] = line
+			await _frames(10)
+	# --- D: facts.
+	file.append("\n## D. parameter facts")
+	await _fs_setup("slider")
+	var pad2: Vector3 = (game.track as Track).bounds.end + Vector3(30.0, 0.0, 30.0)
+	pad2.y = 0.0
+	await _place(pad2, Vector3(1.0, 0.0, 0.0), car.top_speed)
+	await _frames(2)
+	var lock_top := rad_to_deg(car.steer_lock)
+	car._steer_state = 0.0
+	_fs_input(1.0)
+	var n90 := -1
+	var nfull := -1
+	for f in 120:
+		Input.action_press(&"throttle", 1.0)
+		await _frames(1)
+		if n90 < 0 and car._steer_state >= 0.9:
+			n90 = f + 1
+		if nfull < 0 and car._steer_state >= 0.999:
+			nfull = f + 1
+	var lock_turning := rad_to_deg(car.steer_lock)
+	var v_turning := car.forward_speed
+	var slip_turning := rad_to_deg(car.slip_angle)
+	# The lock at full input for speeds from the top down (straight, no slip).
+	var lock_by_v := PackedStringArray()
+	for vv: float in [13.0, 12.0, 11.0, 10.0, 9.0]:
+		lock_by_v.append("%.0f u/s %.2f deg" % [vv, lerpf(car.max_steer_low_deg, car.max_steer_high_deg, clampf(vv / car.top_speed, 0.0, 1.0))])
+	_fs_release()
+	await _fs_setup("tilt")
+	await _place(pad2, Vector3(1.0, 0.0, 0.0), car.top_speed)
+	await _frames(2)
+	car._steer_state = 0.0
+	_fs_input(30.0)
+	var t90 := -1
+	for f in 240:
+		Input.action_press(&"throttle", 1.0)
+		await _frames(1)
+		if t90 < 0 and car._steer_state >= 0.9:
+			t90 = f + 1
+	_fs_release()
+	await _fs_setup("buttons")
+	await _place(pad2, Vector3(1.0, 0.0, 0.0), 2.0)
+	(game.touch as TouchControls).auto_throttle = false # the automatic throttle presses it again next frame
+	var thr := PackedStringArray()
+	for f in 720:
+		await _frames(1)
+		if f + 1 in [60, 240, 480, 720]:
+			thr.append("%.1f s: throttle %.2f, %.2f u/s" % [(f + 1) / 120.0, car.throttle_input, car.forward_speed])
+	var lines := PackedStringArray([
+		"lock at top speed (%.1f u/s): %.2f deg going straight; after 1 s at full input %.2f deg at %.2f u/s and %.1f deg body slip (max_steer_high_deg %.1f, low %.1f; the lock grows as speed falls: %s; and opens toward the low-speed lock with body slip)" % [car.top_speed, lock_top, lock_turning, v_turning, slip_turning, car.max_steer_high_deg, car.max_steer_low_deg, ", ".join(lock_by_v)],
+		"analogue path, SLIDER step to full at top speed: 90%% of lock after %.3f s, full after %.3f s (stick_steer_speed %.0f/s)" % [n90 / 120.0, nfull / 120.0, car.stick_steer_speed],
+		"analogue path, TILT step 0 -> 30 deg at top speed: wheel at 90%% of lock after %.3f s (the 18/s tilt filter plus the stick rate)" % (t90 / 120.0),
+		"no input, automatic throttle, from 2 u/s: %s (top speed %.1f)" % [", ".join(thr), car.top_speed],
+	])
+	for l in lines:
+		log_line("  D " + l)
+		file.append(l)
+	_m["feel D"] = "; ".join(lines)
+	gb.set_meta(&"surface", &"ground")
+	game.audio.phone_set("controls", "buttons")
+	var fa := FileAccess.open(out_dir.path_join("mobile_feel.txt"), FileAccess.WRITE)
+	fa.store_string("\n".join(file) + "\n")
+	fa.close()
+
+
+
+# --- phone control feel: laps by a simulated human (run with -- --mobile) -------------------
+# Pure pursuit on the centre line (Autopilot's look-ahead and gain), seeing the
+# car's state DRV_DELAY late, deciding at DRV_RATE, with coarse output. The
+# same constants serve the after-run, so keep them as they are.
+
+const DRV_DELAY: float = 0.10 ## s: the state it sees is this old
+const DRV_RATE: float = 10.0 ## decisions per second
+const DRV_TILT_STEP: float = 2.0 ## deg: tilt output steps
+const DRV_SLIDER_STEP: float = 0.10 ## share of travel: slider output steps
+const DRV_KEY_ON: float = 0.35 ## BUTTONS / SPLIT: press when the wanted share of lock is above this
+const DRV_KEY_OFF: float = 0.15 ## ... let go below this
+const DRV_BRAKE_MARGIN: float = 0.3 ## u/s over the speed plan before braking
+const DRV_TIME: float = 50.0 ## s per run
+const DRV_RESET_AFTER: float = 2.0 ## s off the road (centre beyond the edge + 0.5) or stuck before it presses reset
+
+
+## Autopilot's speed plan at progress s (its lateral and brake accelerations).
+func _drv_plan(tr: Track, s: float) -> float:
+	var want := 20.0
+	var grip := car.grip_road / 1.3 * minf(car.front_grip, car.rear_grip)
+	var d := 0.0
+	while d < 10.0:
+		var k := tr.max_curvature(s + d, 0.5)
+		if k > 0.0:
+			var vc := sqrt(tr.corner_accel(9.0 * grip, s + d) / k)
+			want = minf(want, sqrt(vc * vc + 2.0 * 7.0 * d))
+		d += 0.5
+	return want
+
+
+## One run of the simulated driver: scheme, circuit (already set), brake policy,
+## coarse (delay, 10 Hz, steps) or fine (no delay, every frame, no steps).
+func _drv_run(scheme: String, braking: bool, coarse: bool, delay_s: float = -1.0, rate: float = -1.0, steps: int = -1, gain: float = 1.3) -> Dictionary:
+	var tr: Track = game.track
+	await _fs_setup(scheme)
+	game.reset_to_grid()
+	car.player_input = true
+	await _frames(10)
+	var completed: Array[float] = []
+	var on_lap := func(t: float) -> void: completed.append(t)
+	game.laps.lap_completed.connect(on_lap)
+	var contacts := [0]
+	var on_hit := func(b: Node) -> void:
+		if b != tr.ground_body:
+			contacts[0] += 1
+	car.body_entered.connect(on_hit)
+	var hist: Array = [] # [pos, fwd, v, progress] per frame
+	var delay_n := roundi(DRV_DELAY * 120.0) if coarse else 0
+	var every := roundi(120.0 / DRV_RATE) if coarse else 1
+	# Factor study (--drvfactors): one of delay, rate and output steps at a time.
+	if delay_s >= 0.0:
+		delay_n = roundi(delay_s * 120.0)
+	if rate > 0.0:
+		every = roundi(120.0 / rate)
+	var quant := coarse if steps < 0 else steps == 1
+	var frames := roundi(DRV_TIME * 120.0)
+	var off_frames := 0
+	var edge_frames := 0
+	var lat_sq := 0.0
+	var reversals := 0
+	var last_sign := 0
+	var resets := 0
+	var bad := 0.0
+	var keys := 0 # BUTTONS / SPLIT side held (-1, 0, 1)
+	var braking_now := false
+	var hint := -1.0
+	for f in frames:
+		hint = tr.progress(car.global_position, hint)
+		var fw := -car.global_basis.z
+		hist.append([car.global_position, Vector3(fw.x, 0.0, fw.z), car.forward_speed, hint])
+		if hist.size() > delay_n + 1:
+			hist.pop_front()
+		if f % every == 0:
+			var st: Array = hist[0]
+			var pos: Vector3 = st[0]
+			var v: float = st[2]
+			var sp: float = st[3]
+			var target := tr.point_at(sp + 0.9 + 0.22 * maxf(v, 0.0))
+			var to := target - pos
+			to.y = 0.0
+			var err := (st[1] as Vector3).signed_angle_to(to, Vector3.DOWN)
+			var lock := deg_to_rad(lerpf(car.max_steer_low_deg, car.max_steer_high_deg, clampf(v / car.top_speed, 0.0, 1.0)))
+			var w := clampf(err / lock * gain, -1.0, 1.0) # wanted share of lock (gain 1.3: Autopilot's)
+			if braking:
+				var plan := _drv_plan(tr, sp)
+				if v > plan + DRV_BRAKE_MARGIN:
+					braking_now = true
+				elif v < plan:
+					braking_now = false
+			_fs_set_brake(braking_now)
+			var out := 0.0
+			match scheme:
+				"tilt":
+					var deg := 0.0
+					if absf(w) > 0.001:
+						deg = signf(w) * (TiltInput.DEAD_ZONE_DEG + pow(absf(w), 1.0 / TiltInput.EXPONENT) * (TiltInput.FULL_LOCK_DEG - TiltInput.DEAD_ZONE_DEG))
+					if quant:
+						deg = roundf(deg / DRV_TILT_STEP) * DRV_TILT_STEP
+					out = deg
+				"slider":
+					var sh := 0.0
+					if absf(w) > 0.001:
+						sh = signf(w) * (TouchControls.SLIDER_DEAD + pow(absf(w), 1.0 / TouchControls.SLIDER_EXPONENT) * (1.0 - TouchControls.SLIDER_DEAD))
+					if quant:
+						sh = roundf(sh / DRV_SLIDER_STEP) * DRV_SLIDER_STEP
+					out = clampf(sh, -1.0, 1.0)
+				_:
+					if keys == 0 and absf(w) > DRV_KEY_ON:
+						keys = int(signf(w))
+					elif keys != 0 and (absf(w) < DRV_KEY_OFF or signf(w) != float(keys)):
+						keys = int(signf(w)) if absf(w) > DRV_KEY_ON else 0
+					out = float(keys)
+			if not (scheme == "split" and braking_now):
+				_fs_input(out)
+			var sg := int(signf(out))
+			if sg != 0:
+				if last_sign != 0 and sg != last_sign:
+					reversals += 1
+				last_sign = sg
+		await _frames(1)
+		var lat := tr.lateral_offset(car.global_position, hint)
+		lat_sq += lat * lat
+		if car.wheels_grounded > car.wheels_on_road:
+			off_frames += 1
+		if absf(lat) > Track.ROAD_HALF_WIDTH:
+			edge_frames += 1
+		# A human resets when off the road or stuck for a while.
+		if absf(lat) > Track.ROAD_HALF_WIDTH + 0.5 or absf(car.forward_speed) < 0.3:
+			bad += 1.0 / 120.0
+		else:
+			bad = 0.0
+		if bad > DRV_RESET_AFTER:
+			game.reset_car()
+			resets += 1
+			bad = 0.0
+			hint = -1.0
+	game.laps.lap_completed.disconnect(on_lap)
+	car.body_entered.disconnect(on_hit)
+	_fs_release()
+	var nl := maxf(completed.size(), 1.0)
+	return {"laps": completed, "off": off_frames / float(frames), "edge": edge_frames / float(frames), "rms": sqrt(lat_sq / frames),
+		"resets": resets, "contacts": contacts[0], "rev": reversals / nl, "rev_min": reversals / (DRV_TIME / 60.0)}
+
+
+## Part C: every scheme on every circuit, both brake policies, coarse and fine,
+## and Autopilot's laps as the reference.
+func _test_mobile_laps() -> void:
+	log_line("\n[mobile laps] simulated driver: delay %.2f s, %.0f Hz, tilt steps %.0f deg, slider steps %.0f%%, keys on/off at %.2f/%.2f, %.0f s per run" % [
+		DRV_DELAY, DRV_RATE, DRV_TILT_STEP, DRV_SLIDER_STEP * 100.0, DRV_KEY_ON, DRV_KEY_OFF, DRV_TIME])
+	if not Mobile.active() or game.touch == null:
+		log_line("  skipped: run with -- --mobile")
+		return
+	var file := PackedStringArray(["# mobile_laps (see the drive test's DRV_ constants)",
+		"circuit\tscheme\tbrakes\tdriver\tlaps\tlap times\toff-road share (a wheel)\tcentre past the edge\tresets\tcontacts\treversals/lap\treversals/min\trms offset"])
+	var only := ""
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--feeltrack="):
+			only = arg.trim_prefix("--feeltrack=")
+	if OS.get_cmdline_user_args().has("--drvfactors"):
+		await _drv_factors()
+		return
+	for tid: String in Tracks.ids():
+		if only != "" and tid != only:
+			continue
+		game.set_track(tid)
+		await _frames(10)
+		# Autopilot reference.
+		car.player_input = false
+		game.reset_to_grid()
+		await _frames(10)
+		var ap := Autopilot.new()
+		ap.car = car
+		ap.track = game.track
+		add_child(ap)
+		var ap_laps: Array[float] = []
+		var on_lap := func(t: float) -> void: ap_laps.append(t)
+		game.laps.lap_completed.connect(on_lap)
+		for f in roundi(DRV_TIME * 120.0):
+			await _frames(1)
+		game.laps.lap_completed.disconnect(on_lap)
+		ap.queue_free()
+		await _frames(2)
+		var ap_line := "%s autopilot: laps %s" % [tid, str(ap_laps.map(func(t: float) -> String: return "%.2f" % t))]
+		log_line("  " + ap_line)
+		_m["laps %s autopilot" % tid] = ap_line
+		file.append("%s\tautopilot\t(plan)\tscripted\t%d\t%s" % [tid, ap_laps.size(), ",".join(ap_laps.map(func(t: float) -> String: return "%.2f" % t))])
+		for scheme: String in ["buttons", "slider", "split", "tilt"]:
+			for braking: bool in [false, true]:
+				for coarse: bool in [true, false]:
+					var r: Dictionary = await _drv_run(scheme, braking, coarse)
+					var lt: Array = r.laps
+					var line := "%s %s %s %s: laps %d %s, off-road %.0f%% (centre past the edge %.0f%%), resets %d, contacts %d, reversals %.1f/lap (%.0f/min), rms offset %.2f u" % [
+						tid, scheme.to_upper(), "brakes" if braking else "no brake", "coarse" if coarse else "fine", lt.size(),
+						str(lt.map(func(t: float) -> String: return "%.2f" % t)), r.off * 100.0, r.edge * 100.0, r.resets, r.contacts, r.rev, r.rev_min, r.rms]
+					log_line("  " + line)
+					_m["laps %s %s %s %s" % [tid, scheme, "brakes" if braking else "nobrake", "coarse" if coarse else "fine"]] = line
+					file.append("%s\t%s\t%s\t%s\t%d\t%s\t%.3f\t%.3f\t%d\t%d\t%.1f\t%.0f\t%.2f" % [tid, scheme, "yes" if braking else "no",
+						"coarse" if coarse else "fine", lt.size(), ",".join(lt.map(func(t: float) -> String: return "%.2f" % t)), r.off, r.edge, r.resets, r.contacts, r.rev, r.rev_min, r.rms])
+	game.set_track(Tracks.DEFAULT_ID)
+	game.audio.phone_set("controls", "buttons")
+	car.player_input = false
+	var fa := FileAccess.open(out_dir.path_join("mobile_laps.txt"), FileAccess.WRITE)
+	fa.store_string("\n".join(file) + "\n")
+	fa.close()
+
+
+
+## --drvfactors: which part of the coarse driver hurts. Figure Eight, braking,
+## one factor at a time (delay, decision rate, output steps), then all three.
+func _drv_factors() -> void:
+	var file := PackedStringArray(["# mobile_laps --drvfactors: Figure Eight, braking driver, one factor at a time",
+		"scheme\tvariant\tlaps\tlap times\toff-road share\tresets\treversals/min\trms offset"])
+	game.set_track(Tracks.DEFAULT_ID)
+	await _frames(10)
+	var variants: Array = [["fine (no delay, 120 Hz, no steps)", 0.0, 120.0, 0], ["delay 100 ms only", 0.1, 120.0, 0],
+		["delay 50 ms only", 0.05, 120.0, 0], ["10 Hz only", 0.0, 10.0, 0], ["steps only", 0.0, 120.0, 1],
+		["delay 100 ms + 10 Hz", 0.1, 10.0, 0], ["all three (coarse)", 0.1, 10.0, 1],
+		["all three, gain 0.65", 0.1, 10.0, 1, 0.65], ["all three, gain 0.45", 0.1, 10.0, 1, 0.45], ["delay 100 ms only, gain 0.65", 0.1, 120.0, 0, 0.65]]
+	for scheme: String in ["slider", "tilt", "buttons"]:
+		for vr: Array in variants:
+			var r: Dictionary = await _drv_run(scheme, true, false, vr[1], vr[2], vr[3], vr[4] if vr.size() > 4 else 1.3)
+			var lt: Array = r.laps
+			var line := "%s %s: laps %d %s, off-road %.0f%%, resets %d, reversals %.0f/min, rms offset %.2f u" % [scheme.to_upper(), vr[0], lt.size(),
+				str(lt.map(func(t: float) -> String: return "%.2f" % t)), r.off * 100.0, r.resets, r.rev_min, r.rms]
+			log_line("  " + line)
+			_m["factors %s %s" % [scheme, vr[0]]] = line
+			file.append("%s\t%s\t%d\t%s\t%.3f\t%d\t%.0f\t%.2f" % [scheme, vr[0], lt.size(), ",".join(lt.map(func(t: float) -> String: return "%.2f" % t)), r.off, r.resets, r.rev_min, r.rms])
+	game.audio.phone_set("controls", "buttons")
+	car.player_input = false
+	var fa := FileAccess.open(out_dir.path_join("mobile_laps_factors.txt"), FileAccess.WRITE)
+	fa.store_string("\n".join(file) + "\n")
+	fa.close()
